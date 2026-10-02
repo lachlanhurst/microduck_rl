@@ -157,7 +157,11 @@ FULL_COLLISION = CollisionCfg(
 # Exclude passive_* joints (jaw linkage in the new model has no XML actuator).
 # Voltage domain randomization (mirrors mjlab_microban):
 #   - vin_range: per-env battery voltage sampled at startup (replaces fixed vin)
-#   - vin_drop_gain_range: load-dependent voltage sag V_drop = gain * sum(|tau|)
+#   - vin_drop_resistance_range: battery + wiring resistance [Ohm]; sag is
+#     V_drop = R * I_bat with I_bat = sum(duty * tau / kt). The fork renamed
+#     the old vin_drop_gain_range (V_drop = gain * sum|tau|, 0 to 0.2 V/(N.m));
+#     0.2 V/(N.m) * kt 0.366 N.m/A is about 0.073 Ohm. The new model only counts
+#     battery-side current (duty < 1), so the same range sags a little less.
 #   - vin_min: hard floor on the effective voltage after sag
 # kp_fw kept at 200 (microduck's preserved firmware stiffness; microban uses 125).
 _BAM_ACTUATOR_KWARGS = dict(
@@ -167,7 +171,7 @@ _BAM_ACTUATOR_KWARGS = dict(
     kp_fw=200.0,  # microduck's preserved firmware stiffness (microban uses 125)
     # vin_range=(6.9, 7.9),
     vin_range=(6.5, 8.2),
-    vin_drop_gain_range=(0.0, 0.2),
+    vin_drop_resistance_range=(0.0, 0.073),
     vin_min=6.0,
     # max_current=1.75,
     delay_min_lag=3,

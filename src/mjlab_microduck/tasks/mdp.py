@@ -3366,7 +3366,7 @@ def randomize_bam_friction(
     (Coulomb + Stribeck + load). Restores nominal (1.0) first to avoid accumulation.
     No-op on actuators without a friction_scale hook.
     """
-    from mjlab_microduck.actuator.friction_dr_bam import FrictionDRBamActuator
+    from mjlab_microduck.actuator.friction_dr_bam import FrictionDRMixin
 
     if env_ids is None:
         env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.int)
@@ -3376,7 +3376,7 @@ def randomize_bam_friction(
     asset: Entity = env.scene[asset_cfg.name]
     lo, hi = scale_range
     for actuator in asset.actuators:
-        if isinstance(actuator, FrictionDRBamActuator):
+        if isinstance(actuator, FrictionDRMixin):
             actuator.reset_friction_scale(env_ids)
             samples = torch.rand(len(env_ids), 1, device=env.device) * (hi - lo) + lo
             actuator.set_friction_scale(env_ids, samples)

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import torch
 
-from mjlab.entity import Entity
+from mjlab.entity import Entity, EntityCfg
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 from mjlab.envs.mdp.actions import JointPositionActionCfg
@@ -31,17 +31,18 @@ from mjlab.managers import (
 )
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import (
+    RslRlModelCfg,
     RslRlOnPolicyRunnerCfg,
-    RslRlPpoActorCriticCfg,
     RslRlPpoAlgorithmCfg,
 )
 from mjlab.scene import SceneCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
-from mjlab.terrains import TerrainImporterCfg
+from mjlab.terrains import TerrainEntityCfg
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from mjlab.viewer import ViewerConfig
 
 from mjlab_microduck.robot.testbench_constants import XL330_TESTBENCH_ROBOT_CFG
+from mjlab_microduck.tasks import mdp as microduck_mdp
 
 
 # ----------------------------------------------------------------------------
@@ -84,11 +85,13 @@ class TargetAngleCommand(CommandTerm):
 
 @dataclass(kw_only=True)
 class TargetAngleCommandCfg(CommandTermCfg):
-    class_type: type[CommandTerm] = TargetAngleCommand
     asset_name: str = "robot"
     joint_name: str = "1"
     range: tuple[float, float] = (-TESTBENCH_MAX_ANGLE_RAD, TESTBENCH_MAX_ANGLE_RAD)
     resampling_time_range: tuple[float, float] = (4.0, 4.0)
+
+    def build(self, env: ManagerBasedRlEnv) -> TargetAngleCommand:
+        return TargetAngleCommand(self, env)
 
 
 # ----------------------------------------------------------------------------
@@ -118,8 +121,19 @@ def target_angle_tracking(
 # ----------------------------------------------------------------------------
 
 
-def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    asset_cfg_full = SceneEntityCfg("robot", joint_names=("1",))
+def make_testbench_env_cfg(
+    play: bool = False,
+    robot_cfg: EntityCfg = XL330_TESTBENCH_ROBOT_CFG,
+    joint_name: str = "1",
+    joint_vel_func=base_mdp.joint_vel_rel,
+    joint_vel_lag: int = 1,
+) -> ManagerBasedRlEnvCfg:
+    """The single-joint tracking task on a testbench robot (XL330 by default).
+
+    The J288 bench (j288_testbench_env_cfg.py) passes its own robot, joint and
+    joint-velocity observation; everything else is shared.
+    """
+    asset_cfg_full = SceneEntityCfg("robot", joint_names=(joint_name,))
 
     # Observations (base noise copied from microduck velocity env; joint_vel
     # noise here is 10× larger to mirror the noisy XL330 firmware velocity read).
@@ -128,13 +142,13 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         noise=Unoise(n_min=-0.0006, n_max=0.0006),
     )
     joint_vel_term = ObservationTermCfg(
-        func=base_mdp.joint_vel_rel,
+        func=joint_vel_func,
         # 10× the microduck velocity env's joint_vel noise (0.024 → 0.24) — the
         # XL330 firmware velocity read is much noisier than MuJoCo's instantaneous
         # qdot, so we inject more observation corruption to force robustness.
         noise=Unoise(n_min=-0.24, n_max=0.24),
-        delay_min_lag=1,
-        delay_max_lag=1,
+        delay_min_lag=joint_vel_lag,
+        delay_max_lag=joint_vel_lag,
         delay_update_period=0,
     )
     actions_term = ObservationTermCfg(func=base_mdp.last_action)
@@ -152,7 +166,7 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     critic_terms = dict(policy_terms)
 
     observations = {
-        "policy": ObservationGroupCfg(
+        "actor": ObservationGroupCfg(
             terms=policy_terms,
             concatenate_terms=True,
             enable_corruption=True,
@@ -170,8 +184,8 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     action_scale = float(os.environ.get("TESTBENCH_ACTION_SCALE", "1.0"))
     actions = {
         "joint_pos": JointPositionActionCfg(
-            asset_name="robot",
-            actuator_names=("1",),
+            entity_name="robot",
+            actuator_names=(joint_name,),
             scale=action_scale,
             use_default_offset=True,
         ),
@@ -181,7 +195,7 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     commands = {
         "target_angle": TargetAngleCommandCfg(
             asset_name="robot",
-            joint_name="1",
+            joint_name=joint_name,
             range=(-TESTBENCH_MAX_ANGLE_RAD, TESTBENCH_MAX_ANGLE_RAD),
             resampling_time_range=(4.0, 4.0),
             debug_vis=False,
@@ -190,6 +204,12 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     # Events
     events = {
+        # BAM writes a per-env friction budget into dof_frictionloss /
+        # dof_damping, which must be expanded per world (see mdp.py).
+        "expand_bam_friction_fields": EventTermCfg(
+            func=microduck_mdp.expand_bam_friction_fields,
+            mode="startup",
+        ),
         "reset_joint": EventTermCfg(
             func=base_mdp.reset_joints_by_offset,
             mode="reset",
@@ -236,8 +256,8 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
-            terrain=TerrainImporterCfg(terrain_type="plane"),
-            entities={"robot": XL330_TESTBENCH_ROBOT_CFG},
+            terrain=TerrainEntityCfg(terrain_type="plane"),
+            entities={"robot": robot_cfg},
             num_envs=1,
             extent=2.0,
         ),
@@ -250,7 +270,7 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         curriculum={},
         viewer=ViewerConfig(
             origin_type=ViewerConfig.OriginType.ASSET_BODY,
-            asset_name="robot",
+            entity_name="robot",
             body_name="arm",
             distance=0.8,
             elevation=-15.0,
@@ -267,13 +287,20 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 
 MicroduckTestbenchRlCfg = RslRlOnPolicyRunnerCfg(
-    policy=RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
-        actor_obs_normalization=False,
-        critic_obs_normalization=False,
-        actor_hidden_dims=(256, 128, 64),
-        critic_hidden_dims=(256, 128, 64),
+    actor=RslRlModelCfg(
+        hidden_dims=(256, 128, 64),
         activation="elu",
+        obs_normalization=False,
+        distribution_cfg={
+            "class_name": "GaussianDistribution",
+            "init_std": 1.0,
+            "std_type": "scalar",
+        },
+    ),
+    critic=RslRlModelCfg(
+        hidden_dims=(256, 128, 64),
+        activation="elu",
+        obs_normalization=False,
     ),
     algorithm=RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,

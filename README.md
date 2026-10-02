@@ -92,7 +92,7 @@ Keyboard-driven (velocity commands, `G` ground pick, `Y` sit/stand, `R` roulade,
 `K`/`L` kicks); `--debug`, `--save-csv`, `--record` support sim2real comparisons.
 The servos are simulated with the same BAM M6 XL330 model the policies are
 trained against (voltage control + load-dependent friction, via
-`bam.mujoco.MujocoController`); `--vin` / `--vin-drop-gain` / `--kp-fw` pin the
+`bam.mujoco.MujocoController`); `--vin` / `--vin-drop-resistance` / `--kp-fw` pin the
 training DR ranges to one value, `--no-bam` falls back to the XML PD actuators.
 
 ### Backlash variants
@@ -108,6 +108,31 @@ output side of the play, both the firmware PD emulation
 read *through* the backlash (`qpos[servo] + qpos[backlash]`). Observation and
 action dims are unchanged, so ONNX export and the runtime need no changes.
 See `src/mjlab_microduck/tasks/backlash.py`.
+
+### Dukki (Unitree J288) variants
+
+Branch `dukki-j288`: the microduck reworked on Unitree J288 servos. Task ids
+end in `-Dukki` in place of `-MicroDuck`: `Mjlab-Velocity-{Flat,Rough}[-Backlash]-Dukki`,
+`Mjlab-VelStand-Flat-Dukki`, `Mjlab-StandUp-Flat-Dukki`, `Mjlab-SitStand-Flat-Dukki`,
+plus `Mjlab-Testbench-J288` (one servo on the pendulum rig it was identified on;
+`-Fast` drops its speed and torque penalties).
+
+- Robot (`robot/dukki_constants.py`): same MJCF, +21 g per servo (J288 39 g),
+  +32 g battery (6S pack), +100 g head electronics (estimate): 1.18 kg.
+- Actuator (`actuator/j288.py`): BAM M6 for the J288 from the
+  [bam fork](https://github.com/lachlanhurst/bam/tree/unitree-j288)
+  (torque-controlled firmware law, 15 ms speed filter on kd, 1.0 N·m clamp,
+  load-dependent friction), per-joint kp/kd, 6S supply range.
+- Joint velocity obs: position difference over one policy tick by default,
+  or the servo's filtered speed (`DUKKI_JOINT_VEL=reported_speed`).
+- Backlash twin: the J288 closes its loop on the rotor, so the PD and the joint
+  obs read the servo joint only, not through the play.
+- Gains: `DUKKI_KP` / `DUKKI_KD` (default 2.0 / 0.05) at registration;
+  `scripts/dukki_gain_sweep.py` prints or submits a grid of HF jobs.
+- Bench sim2real: train `Mjlab-Testbench-J288`, export, then
+  `scripts/j288_testbench_sim2real.py` in sim and on the servo.
+
+Obs and action layouts match the microduck tasks (61-D actor obs, 14 actions).
 
 ## Actuator model
 

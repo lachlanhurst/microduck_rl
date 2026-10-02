@@ -42,8 +42,16 @@ _SERVO_JOINTS_ONLY = (r"^(?!passive_).*",)
 def make_backlash_variant(
     cfg: ManagerBasedRlEnvCfg,
     robot_cfg: EntityCfg = MICRODUCK_BACKLASH_ROBOT_CFG,
+    encoder_through_backlash: bool = True,
 ) -> ManagerBasedRlEnvCfg:
-    """Convert a microduck env cfg (velocity/velstand/standup/...) to backlash."""
+    """Convert a microduck env cfg (velocity/velstand/standup/...) to backlash.
+
+    ``encoder_through_backlash=False`` is the J288 arrangement (Dukki): the
+    servo's position loop and the position it reports are rotor-side, before
+    the gear play, so the joint obs keep their own functions on the servo
+    joints alone (step 2 only narrows the joint selection). Pair it with a robot cfg whose actuator closes on the servo
+    joint, like dukki_constants.DUKKI_*_BACKLASH_ROBOT_CFG.
+    """
     cfg.scene.entities = {**cfg.scene.entities, "robot": robot_cfg}
 
     for group in ("actor", "critic"):
@@ -55,7 +63,8 @@ def make_backlash_variant(
             term = terms.get(term_name)
             if term is None:
                 continue
-            term.func = func
+            if encoder_through_backlash:
+                term.func = func
             # Envs that never narrowed the selection would otherwise feed the
             # backlash joints themselves into the obs (wrong dim + double count).
             if "asset_cfg" not in term.params:

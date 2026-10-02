@@ -330,6 +330,11 @@ def submit(argv: list[str]) -> int:
     # behaves like the local run.
     if os.environ.get("MICRODUCK_WARM_START"):
         env["MICRODUCK_WARM_START"] = os.environ["MICRODUCK_WARM_START"]
+    # Dukki gain-sweep knobs (tasks/dukki.py: DUKKI_KP, DUKKI_KD, ...), read
+    # when the tasks are registered, so the job must see the same values.
+    for k, v in os.environ.items():
+        if k.startswith("DUKKI_"):
+            env[k] = v
     secrets: dict[str, str] = {"HF_TOKEN": token}
 
     # Forward wandb credentials (env var, then ~/.netrc)
