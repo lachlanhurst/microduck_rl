@@ -24,6 +24,14 @@
 
 The critic keeps the true joint velocity (privileged).
 
+3. An ``action_over_limit`` penalty (as the roller tasks have): commanding a
+   joint target more than ``OVER_LIMIT_TORQUE / kp`` past its hard stop is
+   penalised. The first Dukki velocity runs (02/10/2026) learned to hold one
+   hip_yaw commanded about 2 rad past its stop, the servo at its 1.0 N.m clamp
+   100% of the time (a brace that only works because the sim's stop is
+   perfectly rigid, and that would overheat the real servo in seconds). The
+   allowance lets a joint press its stop with at most OVER_LIMIT_TORQUE.
+
 Gain sweep. ``DUKKI_KP`` [N.m/rad] and ``DUKKI_KD`` [N.m.s/rad] set the gains
 of every joint (default dukki_constants.J288_KP / J288_KD). They are read when
 the tasks are registered, so set them on the command line:
@@ -41,6 +49,7 @@ from copy import deepcopy
 import torch
 from mjlab.entity import Entity
 from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.managers import RewardTermCfg
 from mjlab.managers.manager_base import ManagerTermBase
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
@@ -51,9 +60,15 @@ from mjlab_microduck.robot.dukki_constants import (
     make_dukki_robot_cfg,
     make_j288_actuators,
 )
+from mjlab_microduck.tasks import mdp as microduck_mdp
 from mjlab_microduck.tasks.backlash import make_backlash_variant
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+
+#: Torque [N.m] a joint may hold against its hard stop before the over-limit
+#: penalty starts (the target may go this / kp past the stop).
+OVER_LIMIT_TORQUE = 0.2
+OVER_LIMIT_WEIGHT = -1.0
 
 JOINT_VEL_SOURCES = ("position_difference", "reported_speed")
 
@@ -164,9 +179,8 @@ def make_dukki_variant(
     ``joint_vel_source`` default to the DUKKI_* environment variables.
     """
     env_kp, env_kd = dukki_gains_from_env()
-    actuators = make_j288_actuators(
-        kp_fw=env_kp if kp is None else kp, kd_fw=env_kd if kd is None else kd
-    )
+    kp = env_kp if kp is None else kp
+    actuators = make_j288_actuators(kp_fw=kp, kd_fw=env_kd if kd is None else kd)
     source = joint_vel_source or dukki_joint_vel_source_from_env()
     if source not in JOINT_VEL_SOURCES:
         raise ValueError(f"joint_vel_source must be one of {JOINT_VEL_SOURCES}")
@@ -194,4 +208,11 @@ def make_dukki_variant(
         term.delay_max_lag = 0
         term.delay_update_period = 0
         terms["joint_vel"] = term
+
+    if "joint_pos" in cfg.actions:
+        cfg.rewards["action_over_limit"] = RewardTermCfg(
+            func=microduck_mdp.action_over_limit_penalty,
+            weight=OVER_LIMIT_WEIGHT,
+            params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
+        )
     return cfg

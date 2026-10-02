@@ -160,3 +160,19 @@ def test_dukki_tasks_registered_with_microduck_obs_layout():
     d = load_env_cfg("Mjlab-Velocity-Flat-Backlash-Dukki")
     assert d.observations["actor"].terms["joint_pos"].func.__name__ == "joint_pos_rel"
     assert d.observations["critic"].terms["joint_vel"].func.__name__ == "joint_vel_rel"
+
+
+def test_dukki_tasks_penalise_commands_past_the_stop():
+    """The first Dukki runs jammed a hip_yaw against its stop at the torque clamp."""
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjlab_microduck.tasks.dukki import OVER_LIMIT_TORQUE, make_dukki_variant
+    from mjlab_microduck.tasks.microduck_velocity_env_cfg import make_microduck_velocity_env_cfg
+
+    for task in ("Mjlab-Velocity-Flat-Dukki", "Mjlab-Velocity-Flat-Backlash-Dukki"):
+        term = load_env_cfg(task).rewards["action_over_limit"]
+        assert term.weight < 0
+        assert term.params["overshoot"] == pytest.approx(OVER_LIMIT_TORQUE / dk.J288_KP)
+    # The allowance follows the gains, so a gain sweep keeps the same torque cap.
+    cfg = make_dukki_variant(make_microduck_velocity_env_cfg(), kp=4.0)
+    assert cfg.rewards["action_over_limit"].params["overshoot"] == pytest.approx(OVER_LIMIT_TORQUE / 4.0)
