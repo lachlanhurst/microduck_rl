@@ -78,13 +78,13 @@ def _empty_log(n: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def rollout_sim(onnx_path: str, total_time: float, seed: int, kp, kd, smooth=True) -> dict:
+def rollout_sim(onnx_path: str, total_time: float, seed: int, kp, kd, smooth=True, setup=None) -> dict:
     import torch
     from mjlab.envs import ManagerBasedRlEnv
 
     from mjlab_microduck.tasks.j288_testbench_env_cfg import make_j288_testbench_env_cfg
 
-    cfg = make_j288_testbench_env_cfg(play=True, kp=kp, kd=kd, smooth=smooth)
+    cfg = make_j288_testbench_env_cfg(play=True, setup=setup, kp=kp, kd=kd, smooth=smooth)
     cfg.scene.num_envs = 1
     cfg.commands["target_angle"].resampling_time_range = (1e6, 1e6)
     cfg.episode_length_s = max(total_time + 10.0, cfg.episode_length_s)
@@ -273,6 +273,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--kp", type=float, default=env_kp, help="[N.m/rad], as trained")
     ap.add_argument("--kd", type=float, default=env_kd, help="[N.m.s/rad], as trained")
+    ap.add_argument("--setup", help="sim rig, a J288_BENCH_SETUPS key (default DUKKI_BENCH_SETUP or l150_m108)")
     ap.add_argument("--port", default="/dev/cu.usbmodem3744CBC819741")
     ap.add_argument("--motor-id", type=int, default=0)
     ap.add_argument("--zero-file", help="hanging-angle calibration from bam.unitree.calibrate")
@@ -288,7 +289,7 @@ def main() -> None:
     if not (args.mode and args.onnx and args.out):
         ap.error("--mode, --onnx and --out are needed for a rollout")
     if args.mode == "sim":
-        rec = rollout_sim(args.onnx, args.duration, args.seed, args.kp, args.kd)
+        rec = rollout_sim(args.onnx, args.duration, args.seed, args.kp, args.kd, setup=args.setup)
     else:
         if not args.zero_file:
             ap.error("--zero-file is needed on the real servo")

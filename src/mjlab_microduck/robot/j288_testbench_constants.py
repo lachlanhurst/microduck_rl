@@ -37,6 +37,10 @@ J288_BENCH_SETUPS: dict[str, tuple[float, float, float, float]] = {
     "l150_m108": (0.150, 0.091, 0.017, 3.44e-05),
     "l150_m333": (0.150, 0.316, 0.017, 1.19e-04),
     "l150_m417": (0.150, 0.400, 0.017, 1.51e-04),
+    # 02/10/2026: the 108 g setup with a bolt added to hold the end mass on,
+    # weighed at 163 g total. Disc inertia m r^2 / 2 at r = 27.5 mm, the bolt
+    # counted in it.
+    "l150_m163": (0.150, 0.146, 0.017, 5.52e-05),
 }
 DEFAULT_BENCH_SETUP = "l150_m108"
 
