@@ -65,7 +65,8 @@ def main() -> int:
                 cmd += [
                     "--agent.seed", str(args.seed),
                     "--agent.wandb-project", args.wandb_project,
-                    "--agent.wandb-tags", "gain-sweep",  # train takes only one; gains are in the name
+                    # train parses this as a Python literal, not space-separated values.
+                    "--agent.wandb-tags", repr(("gain-sweep", f"kp{kp:g}", f"kd{kd:g}")),
                 ]
             else:
                 cmd += [
