@@ -11,7 +11,10 @@ Prints the commands by default. --launch submits them (each job bills GPU time).
 
     uv run scripts/dukki_gain_sweep.py                       # print the grid
     uv run scripts/dukki_gain_sweep.py --launch --namespace <you>
-    uv run scripts/dukki_gain_sweep.py --local --launch
+    uv run scripts/dukki_gain_sweep.py --local --launch --tag gain-sweep-2 --eval-dir runs/eval
+
+--eval-dir runs scripts/dukki_eval.py on each --local run's final checkpoint as
+soon as it finishes, with that run's gains, and writes <run name>.json there.
     uv run scripts/dukki_gain_sweep.py --kp 1 2 3 --kd 0.05 --iterations 2000
 
 Compare runs in wandb on the tracking terms (track_linear_velocity,
@@ -26,12 +29,30 @@ extrapolate well, but check the chosen pair on the bench (Mjlab-Testbench-J288).
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import shlex
 import subprocess
 import sys
 
 TASK = "Mjlab-Velocity-Flat-Dukki"
+
+
+def evaluate(args, env: dict, name: str) -> None:
+    """dukki_eval on the newest run called `name`, its last checkpoint, with its gains."""
+    dirs = sorted(glob.glob(f"logs/rsl_rl/*/*_{name}"), key=os.path.getmtime)
+    checkpoint = dirs[-1] + f"/model_{args.iterations - 1}.pt" if dirs else None
+    if not checkpoint or not os.path.exists(checkpoint):
+        print(f"no final checkpoint for {name}, not evaluated", file=sys.stderr)
+        return
+    os.makedirs(args.eval_dir, exist_ok=True)
+    cmd = [
+        "uv", "run", "scripts/dukki_eval.py", "--device", "cuda:0", "--task", args.task,
+        "--checkpoints", f"{name}={checkpoint}", "--json", os.path.join(args.eval_dir, f"{name}.json"),
+    ]
+    print(shlex.join(cmd), flush=True)
+    if subprocess.run(cmd, env={**os.environ, **env}).returncode != 0:
+        print(f"evaluation of {name} failed", file=sys.stderr)
 
 
 def main() -> int:
@@ -47,6 +68,8 @@ def main() -> int:
     ap.add_argument("--local", action="store_true", help="train here, one run after another")
     ap.add_argument("--wandb-project", default="dukki", help="wandb project for --local runs")
     ap.add_argument("--seed", type=int, default=42, help="seed for every --local run")
+    ap.add_argument("--tag", default="gain-sweep", help="wandb tag for --local runs, beside kp and kd")
+    ap.add_argument("--eval-dir", help="--local: evaluate each finished run's last checkpoint into this folder")
     ap.add_argument("--launch", action="store_true", help="submit the jobs (default: print only)")
     args = ap.parse_args()
 
@@ -66,7 +89,7 @@ def main() -> int:
                     "--agent.seed", str(args.seed),
                     "--agent.wandb-project", args.wandb_project,
                     # train parses this as a Python literal, not space-separated values.
-                    "--agent.wandb-tags", repr(("gain-sweep", f"kp{kp:g}", f"kd{kd:g}")),
+                    "--agent.wandb-tags", repr((args.tag, f"kp{kp:g}", f"kd{kd:g}")),
                 ]
             else:
                 cmd += [
@@ -77,10 +100,10 @@ def main() -> int:
                 ]
                 if args.namespace:
                     cmd += ["--namespace", args.namespace]
-            runs.append((env, cmd))
+            runs.append((env, cmd, name))
 
     failed = []
-    for env, cmd in runs:
+    for env, cmd, name in runs:
         line = " ".join(f"{k}={v}" for k, v in env.items()) + " " + shlex.join(cmd)
         print(line, flush=True)
         if args.launch:
@@ -92,6 +115,8 @@ def main() -> int:
             elif result.returncode != 0:
                 print(f"submission failed ({result.returncode}), stopping", file=sys.stderr)
                 return result.returncode
+            elif args.local and args.eval_dir:
+                evaluate(args, env, name)
     if failed:
         print("failed runs:\n" + "\n".join(failed), file=sys.stderr)
         return 1

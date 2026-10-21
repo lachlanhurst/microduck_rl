@@ -200,13 +200,15 @@ J288_KD = 0.05
 J288_VIN_RANGE = (21.0, 25.2)
 J288_VIN_MIN = 18.0
 
-# Command delay [5 ms physics steps]. PLACEHOLDER until the bridge exists: the
-# bench adapter's delay fitted at 0.02 ms, but the robot's path is policy ->
-# bridge link (1.4 to 2.8 ms) -> servo bus (0.5 to 1.5 ms) -> servo, plus
-# inference and scheduling jitter. 1 to 4 steps (5 to 20 ms) brackets it;
-# replace with the measured end-to-end figure.
+# Command delay [5 ms physics steps], measured 21/10/2026 on the bench (dukki
+# hardware.md 5.5, compute-setup.md 5.9): from a servo's sample in the frame a
+# tick reads to that servo acting on the tick's command, 4.25 ms at the median
+# (3.75 to 5.25 ms for 90%) through the bridge with protocol 2, all fifteen
+# servos moving, plus 0.15 ms of inference on the CM4's Cortex-A72. About one
+# step; two covers the slow tail and scheduling jitter (robotd has no real-time
+# priority). Was a 1 to 4 step placeholder before the bridge existed.
 J288_DELAY_MIN_LAG = 1
-J288_DELAY_MAX_LAG = 4
+J288_DELAY_MAX_LAG = 2
 
 _J288_ACTUATOR_KWARGS = dict(
     motor_name="unitree_j288",
