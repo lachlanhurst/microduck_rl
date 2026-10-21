@@ -25,6 +25,7 @@ import torch
 from PIL import Image, ImageDraw, ImageFont
 
 import mjlab_microduck.tasks  # noqa: F401  (registers tasks)
+from mjlab_microduck.tasks.dukki import check_cfg_matches_run
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
@@ -61,6 +62,7 @@ def main():
         del cfg.events[name]
     for term in cfg.commands.values():
         term.resampling_time_range = (1e6, 1e6)
+    check_cfg_matches_run(cfg, args.checkpoint)
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     rl_cfg = load_rl_cfg(args.task)
     wrapped = RslRlVecEnvWrapper(env, clip_actions=rl_cfg.clip_actions)

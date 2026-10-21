@@ -81,6 +81,48 @@ def dukki_gains_from_env() -> tuple[float, float]:
     )
 
 
+def check_cfg_matches_run(cfg: ManagerBasedRlEnvCfg, checkpoint: str) -> None:
+    """Raise if ``cfg`` differs from the one ``checkpoint`` was trained with.
+
+    Compares timestep, decimation and J288 gains against the run's
+    ``params/env.yaml``. Gains come from DUKKI_KP / DUKKI_KD, so a script that
+    loads a sweep checkpoint without them would silently run other gains.
+    Checkpoints without a params folder (Hub downloads, .onnx) are not checked.
+    """
+    import re
+    from pathlib import Path
+
+    path = Path(checkpoint).parent / "params" / "env.yaml"
+    if not path.exists():
+        print(f"[dukki] {path} not found: not checking {checkpoint} against its training config")
+        return
+    text = path.read_text()
+
+    def saved(key: str, indent: str = r"\s*") -> list[float]:
+        return [float(v) for v in re.findall(rf"^{indent}{key}: ([-0-9.e]+)$", text, re.M)]
+
+    actuators = cfg.scene.entities["robot"].articulation.actuators
+    have = {
+        "decimation": [float(cfg.decimation)],
+        "timestep": [float(cfg.sim.mujoco.timestep)],
+        "kp_fw": [float(a.kp_fw) for a in actuators if hasattr(a, "kp_fw")],
+        "kd_fw": [float(a.kd_fw) for a in actuators if hasattr(a, "kd_fw")],
+    }
+    want = {
+        "decimation": saved("decimation", ""),
+        "timestep": saved("timestep"),
+        "kp_fw": saved("kp_fw"),
+        "kd_fw": saved("kd_fw"),
+    }
+    wrong = {k: (have[k], want[k]) for k in have if have[k] != want[k]}
+    if wrong:
+        detail = ", ".join(f"{k} {h} (trained with {w})" for k, (h, w) in wrong.items())
+        raise ValueError(
+            f"{checkpoint}: env differs from its training config: {detail}. "
+            "Set DUKKI_KP / DUKKI_KD to the run's gains."
+        )
+
+
 def dukki_joint_vel_source_from_env() -> str:
     source = os.environ.get("DUKKI_JOINT_VEL", "position_difference")
     if source not in JOINT_VEL_SOURCES:

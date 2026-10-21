@@ -33,6 +33,7 @@ from dataclasses import asdict
 import torch
 
 import mjlab_microduck.tasks  # noqa: F401  (registers tasks)
+from mjlab_microduck.tasks.dukki import check_cfg_matches_run
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
@@ -200,6 +201,8 @@ def main():
 
     torch.manual_seed(args.seed)  # startup randomization is drawn while building
     env, wrapped, runner, cmd = build(args.task, args.envs_per_scenario, args.duration, args.device)
+    for item in args.checkpoints:  # all up front, before any long evaluation
+        check_cfg_matches_run(env.cfg, item.split("=", 1)[1])
     results = {}
     for item in args.checkpoints:
         label, path = item.split("=", 1)
