@@ -49,6 +49,9 @@ SCENARIOS = {
     "turn_1.0": (0.0, 0.0, 1.0),
 }
 CLAMP = 1.0  # J288 motor torque clamp [N.m]
+# Fastest joint speed in the J288 BAM identification (dukki docs/j288-testing.md
+# section 15.4): above it the actuator model is extrapolating.
+IDENTIFIED_SPEED = 18.6  # [rad/s]
 
 
 class OnnxPolicy:
@@ -127,6 +130,8 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
     peak = torch.zeros(n, j, device=env.device)
     sq = torch.zeros(n, j, device=env.device)
     near_clamp = torch.zeros(n, j, device=env.device)
+    peak_qd = torch.zeros(n, j, device=env.device)
+    fast = torch.zeros(n, device=env.device)
     prev_action = None
     p0 = h_prev = None
     yaw_turned = torch.zeros(n, device=env.device)
@@ -156,7 +161,10 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
             peak = torch.maximum(peak, tau)
             sq += tau**2
             near_clamp += (tau > 0.95 * limit).float()
-            acc["standvel"] += robot.data.joint_vel[:, act._target_ids_list].pow(2).mean(dim=1)
+            qd = robot.data.joint_vel[:, act._target_ids_list]
+            acc["standvel"] += qd.pow(2).mean(dim=1)
+            peak_qd = torch.maximum(peak_qd, qd.abs())
+            fast += (qd.abs() > IDENTIFIED_SPEED).any(dim=1).float()
     s = acc["samples"]
     window = (steps - settle_steps) * env.step_dt
     net_speed = torch.linalg.norm(robot.data.root_link_pos_w[:, :2] - p0, dim=1) / window
@@ -183,6 +191,9 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
             "clamp_joint": names[clamp_joint],
             "action_change": float((acc["dact"][sl] / s[sl]).mean()),
             "joint_speed_rms": float((acc["standvel"][sl] / s[sl]).sqrt().mean()),
+            "peak_joint_speed": float(peak_qd[sl].max()),
+            "peak_speed_joint": names[int(peak_qd[sl].max(0).values.argmax())],
+            "pct_above_identified_speed": float(100 * (fast[sl] / s[sl]).mean()),
         }
     return out
 
@@ -208,12 +219,12 @@ def main():
         label, path = item.split("=", 1)
         results[label] = evaluate(env, wrapped, runner, cmd, path, args.duration, args.settle, args.seed)
         print(f"\n== {label} on {args.task}")
-        print(f"  {'scenario':10s} {'net m/s':>8s} {'net r/s':>8s} {'lin err':>8s} {'yaw err':>8s} {'falls':>5s} {'peak tau':>9s} {'joint':>15s} {'rms max':>8s} {'clamp %':>8s} {'at clamp':>15s} {'d action':>9s} {'qd rms':>7s}")
+        print(f"  {'scenario':10s} {'net m/s':>8s} {'net r/s':>8s} {'lin err':>8s} {'yaw err':>8s} {'falls':>5s} {'peak tau':>9s} {'joint':>15s} {'rms max':>8s} {'clamp %':>8s} {'at clamp':>15s} {'d action':>9s} {'qd rms':>7s} {'peak qd':>8s} {'qd joint':>15s} {'>18.6 %':>8s}")
         for sc, r in results[label].items():
             print(
                 f"  {sc:10s} {r['net_speed']:8.3f} {r['net_yaw']:+8.2f} {r['lin_err']:8.3f} {r['yaw_err']:8.3f} {r['falls']:5d} {r['peak_torque']:9.3f} "
                 f"{r['peak_joint']:>15s} {r['rms_torque_max_joint']:8.3f} {r['clamp_pct_worst_joint']:8.1f} {r['clamp_joint']:>15s} "
-                f"{r['action_change']:9.4f} {r['joint_speed_rms']:7.3f}"
+                f"{r['action_change']:9.4f} {r['joint_speed_rms']:7.3f} {r['peak_joint_speed']:8.2f} {r['peak_speed_joint']:>15s} {r['pct_above_identified_speed']:8.2f}"
             )
     if args.json:
         with open(args.json, "w") as f:
