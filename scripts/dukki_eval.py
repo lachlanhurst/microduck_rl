@@ -10,9 +10,16 @@ checkpoint, so all checkpoints see identical randomization.
     uv run scripts/dukki_eval.py --task Mjlab-Velocity-Flat-Dukki \\
         --checkpoints flat_2999=path/model_2999.pt bl_2999=path/model_2999.pt
 
-Per scenario, after a settling period: velocity tracking error, falls, motor
+A checkpoint may also be an exported ``.onnx`` policy (61-D obs in, 14 actions
+out), e.g. Pollen's XL330 ``alpha_walking.onnx`` on Mjlab-Velocity-Flat-MicroDuck.
+
+Per scenario, after a settling period: net speed (distance covered over the
+window) and net yaw rate (heading turned over the window), which separate real
+motion from the body's sway, the mean velocity tracking error, falls, motor
 torque (peak, RMS of the worst joint, and the share of time the worst joint
-spends within 5% of the 1.0 N.m clamp, as the servo reports it), and
+spends within 5% of its limit: the J288's 1.0 N.m clamp, or for a
+voltage-controlled servo like the XL330 its stall torque vin * kt / R, capped by
+any firmware current limit), and
 jitter (mean |change in action| per policy step, and joint speed RMS while
 standing, where a steady policy should be near zero).
 """
@@ -41,6 +48,36 @@ SCENARIOS = {
     "turn_1.0": (0.0, 0.0, 1.0),
 }
 CLAMP = 1.0  # J288 motor torque clamp [N.m]
+
+
+class OnnxPolicy:
+    """An exported policy, run one environment at a time (batch 1 graphs)."""
+
+    def __init__(self, path: str):
+        import onnxruntime as ort
+
+        self.session = ort.InferenceSession(path)
+        self.name = self.session.get_inputs()[0].name
+
+    def __call__(self, obs):
+        x = obs["actor"].numpy().astype("float32")
+        out = [self.session.run(None, {self.name: x[i : i + 1]})[0] for i in range(len(x))]
+        import numpy as np
+
+        return torch.as_tensor(np.concatenate(out, axis=0))
+
+
+def motor_torque_and_limit(env, act):
+    """|motor torque| per env and joint, and the torque limit to compare it with."""
+    if hasattr(act, "reported_torque"):
+        return act.reported_torque.abs(), torch.full_like(act.reported_torque, CLAMP)
+    tau = env.sim.data.qfrc_actuator[:, act._dof_ids].abs()
+    bam = act._bam_model
+    limit = act.vin_tensor * bam.kt.value / bam.R.value  # (N, 1), voltage-limited at rest
+    max_current = getattr(bam.actuator, "max_current", None)
+    if max_current:  # firmware current limit, e.g. the XL330's 1.75 A
+        limit = torch.clamp(limit, max=max_current * bam.kt.value)
+    return tau, limit.expand_as(tau)
 
 
 def build(task: str, envs_per_scenario: int, duration: float):
@@ -72,8 +109,11 @@ def pin_commands(env, cmd):
 
 
 def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
-    runner.load(ckpt, map_location="cpu")
-    policy = runner.get_inference_policy(device="cpu")
+    if ckpt.endswith(".onnx"):
+        policy = OnnxPolicy(ckpt)
+    else:
+        runner.load(ckpt, map_location="cpu")
+        policy = runner.get_inference_policy(device="cpu")
     wrapped.reset()
     env.reset(seed=seed)
     pin_commands(env, cmd)
@@ -87,6 +127,8 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
     sq = torch.zeros(n, j)
     near_clamp = torch.zeros(n, j)
     prev_action = None
+    p0 = h_prev = None
+    yaw_turned = torch.zeros(n)
     with torch.no_grad():
         for k in range(steps):
             pin_commands(env, cmd)
@@ -95,6 +137,11 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
             if k < settle_steps:
                 prev_action = action.clone()
                 continue
+            heading = robot.data.heading_w.clone()
+            if p0 is None:
+                p0, h_prev = robot.data.root_link_pos_w[:, :2].clone(), heading
+            yaw_turned += torch.atan2(torch.sin(heading - h_prev), torch.cos(heading - h_prev))
+            h_prev = heading
             timeouts = extras.get("time_outs", torch.zeros_like(dones))
             acc["falls"] += (dones.bool() & ~timeouts.bool()).float()
             v = robot.data.root_link_lin_vel_b[:, :2]
@@ -104,12 +151,15 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
             acc["samples"] += 1
             acc["dact"] += (action - prev_action).abs().mean(dim=1)
             prev_action = action.clone()
-            tau = act.reported_torque.abs()
+            tau, limit = motor_torque_and_limit(env, act)
             peak = torch.maximum(peak, tau)
             sq += tau**2
-            near_clamp += (tau > 0.95 * CLAMP).float()
+            near_clamp += (tau > 0.95 * limit).float()
             acc["standvel"] += robot.data.joint_vel[:, act._target_ids_list].pow(2).mean(dim=1)
     s = acc["samples"]
+    window = (steps - settle_steps) * env.step_dt
+    net_speed = torch.linalg.norm(robot.data.root_link_pos_w[:, :2] - p0, dim=1) / window
+    net_yaw = yaw_turned / window
     names = list(act.target_names)
     out = {}
     per = n // len(SCENARIOS)
@@ -120,6 +170,8 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
         clamp_pct = 100 * (near_clamp[sl] / s[sl, None]).mean(0)
         clamp_joint = int(clamp_pct.argmax())
         out[sc] = {
+            "net_speed": float(net_speed[sl].mean()),
+            "net_yaw": float(net_yaw[sl].mean()),
             "lin_err": float((acc["lin_err"][sl] / s[sl]).mean()),
             "yaw_err": float((acc["yaw_err"][sl] / s[sl]).mean()),
             "falls": int(acc["falls"][sl].sum()),
@@ -145,16 +197,17 @@ def main():
     ap.add_argument("--json", help="write results here")
     args = ap.parse_args()
 
+    torch.manual_seed(args.seed)  # startup randomization is drawn while building
     env, wrapped, runner, cmd = build(args.task, args.envs_per_scenario, args.duration)
     results = {}
     for item in args.checkpoints:
         label, path = item.split("=", 1)
         results[label] = evaluate(env, wrapped, runner, cmd, path, args.duration, args.settle, args.seed)
         print(f"\n== {label} on {args.task}")
-        print(f"  {'scenario':10s} {'lin err':>8s} {'yaw err':>8s} {'falls':>5s} {'peak tau':>9s} {'joint':>15s} {'rms max':>8s} {'clamp %':>8s} {'at clamp':>15s} {'d action':>9s} {'qd rms':>7s}")
+        print(f"  {'scenario':10s} {'net m/s':>8s} {'net r/s':>8s} {'lin err':>8s} {'yaw err':>8s} {'falls':>5s} {'peak tau':>9s} {'joint':>15s} {'rms max':>8s} {'clamp %':>8s} {'at clamp':>15s} {'d action':>9s} {'qd rms':>7s}")
         for sc, r in results[label].items():
             print(
-                f"  {sc:10s} {r['lin_err']:8.3f} {r['yaw_err']:8.3f} {r['falls']:5d} {r['peak_torque']:9.3f} "
+                f"  {sc:10s} {r['net_speed']:8.3f} {r['net_yaw']:+8.2f} {r['lin_err']:8.3f} {r['yaw_err']:8.3f} {r['falls']:5d} {r['peak_torque']:9.3f} "
                 f"{r['peak_joint']:>15s} {r['rms_torque_max_joint']:8.3f} {r['clamp_pct_worst_joint']:8.1f} {r['clamp_joint']:>15s} "
                 f"{r['action_change']:9.4f} {r['joint_speed_rms']:7.3f}"
             )
