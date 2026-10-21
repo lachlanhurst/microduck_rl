@@ -60,11 +60,11 @@ class OnnxPolicy:
         self.name = self.session.get_inputs()[0].name
 
     def __call__(self, obs):
-        x = obs["actor"].numpy().astype("float32")
+        x = obs["actor"].cpu().numpy().astype("float32")
         out = [self.session.run(None, {self.name: x[i : i + 1]})[0] for i in range(len(x))]
         import numpy as np
 
-        return torch.as_tensor(np.concatenate(out, axis=0))
+        return torch.as_tensor(np.concatenate(out, axis=0), device=obs["actor"].device)
 
 
 def motor_torque_and_limit(env, act):
@@ -80,7 +80,7 @@ def motor_torque_and_limit(env, act):
     return tau, limit.expand_as(tau)
 
 
-def build(task: str, envs_per_scenario: int, duration: float):
+def build(task: str, envs_per_scenario: int, duration: float, device: str = "cpu"):
     cfg = load_env_cfg(task)
     n = envs_per_scenario * len(SCENARIOS)
     cfg.scene.num_envs = n
@@ -89,11 +89,11 @@ def build(task: str, envs_per_scenario: int, duration: float):
         del cfg.events[name]
     for term in cfg.commands.values():
         term.resampling_time_range = (1e6, 1e6)
-    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    env = ManagerBasedRlEnv(cfg=cfg, device=device)
     wrapped = RslRlVecEnvWrapper(env, clip_actions=load_rl_cfg(task).clip_actions)
     runner_cls = load_runner_cls(task) or OnPolicyRunner
-    runner = runner_cls(wrapped, asdict(load_rl_cfg(task)), device="cpu")
-    cmd = torch.tensor([v for v in SCENARIOS.values() for _ in range(envs_per_scenario)])
+    runner = runner_cls(wrapped, asdict(load_rl_cfg(task)), device=device)
+    cmd = torch.tensor([v for v in SCENARIOS.values() for _ in range(envs_per_scenario)], device=device)
     return env, wrapped, runner, cmd
 
 
@@ -112,8 +112,8 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
     if ckpt.endswith(".onnx"):
         policy = OnnxPolicy(ckpt)
     else:
-        runner.load(ckpt, map_location="cpu")
-        policy = runner.get_inference_policy(device="cpu")
+        runner.load(ckpt, map_location=env.device)
+        policy = runner.get_inference_policy(device=env.device)
     wrapped.reset()
     env.reset(seed=seed)
     pin_commands(env, cmd)
@@ -122,13 +122,13 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
     act = robot.actuators[0]
     n, j = cmd.shape[0], len(act.target_names)
     steps, settle_steps = int(duration / env.step_dt), int(settle / env.step_dt)
-    acc = {k: torch.zeros(n) for k in ("lin_err", "yaw_err", "samples", "falls", "dact", "standvel")}
-    peak = torch.zeros(n, j)
-    sq = torch.zeros(n, j)
-    near_clamp = torch.zeros(n, j)
+    acc = {k: torch.zeros(n, device=env.device) for k in ("lin_err", "yaw_err", "samples", "falls", "dact", "standvel")}
+    peak = torch.zeros(n, j, device=env.device)
+    sq = torch.zeros(n, j, device=env.device)
+    near_clamp = torch.zeros(n, j, device=env.device)
     prev_action = None
     p0 = h_prev = None
-    yaw_turned = torch.zeros(n)
+    yaw_turned = torch.zeros(n, device=env.device)
     with torch.no_grad():
         for k in range(steps):
             pin_commands(env, cmd)
@@ -195,10 +195,11 @@ def main():
     ap.add_argument("--settle", type=float, default=2.0, help="ignored at the start [s]")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", help="write results here")
+    ap.add_argument("--device", default="cpu", help="simulate on this device, e.g. cuda:0 as in training")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)  # startup randomization is drawn while building
-    env, wrapped, runner, cmd = build(args.task, args.envs_per_scenario, args.duration)
+    env, wrapped, runner, cmd = build(args.task, args.envs_per_scenario, args.duration, args.device)
     results = {}
     for item in args.checkpoints:
         label, path = item.split("=", 1)
