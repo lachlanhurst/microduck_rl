@@ -65,7 +65,7 @@ def main() -> int:
                 cmd += [
                     "--agent.seed", str(args.seed),
                     "--agent.wandb-project", args.wandb_project,
-                    "--agent.wandb-tags", "gain-sweep", f"kp{kp:g}", f"kd{kd:g}",
+                    "--agent.wandb-tags", "gain-sweep",  # train takes only one; gains are in the name
                 ]
             else:
                 cmd += [
