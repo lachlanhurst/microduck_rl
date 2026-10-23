@@ -156,7 +156,10 @@ def main():
 
                 v = robot.data.root_link_lin_vel_b[0, :2].numpy()
                 w = robot.data.root_link_ang_vel_b[0, 2].item()
-                tau = act.reported_torque[0].abs().numpy()
+                if hasattr(act, "reported_torque"):
+                    tau = act.reported_torque[0].abs().numpy()
+                else:  # e.g. the XL330: the joint torque the actuator applies
+                    tau = env.sim.data.qfrc_actuator[0, act._dof_ids].abs().cpu().numpy()
                 top = np.argsort(-tau)[:3]
                 t += env.step_dt
                 if log:
