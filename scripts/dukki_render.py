@@ -58,8 +58,12 @@ def main():
     cfg = load_env_cfg(args.task)
     cfg.scene.num_envs = 1
     cfg.episode_length_s = total + 10.0
-    for name in [k for k in cfg.events if "push" in k or "topple" in k]:
+    removed = [k for k in cfg.events if "push" in k or "topple" in k]
+    for name in removed:
         del cfg.events[name]
+    # Curricula that adjust a removed event by name (sit-stand, stand-up) would fail on start.
+    for name in [k for k, t in cfg.curriculum.items() if (t.params or {}).get("event_name") in removed]:
+        del cfg.curriculum[name]
     for term in cfg.commands.values():
         term.resampling_time_range = (1e6, 1e6)
     check_cfg_matches_run(cfg, args.checkpoint)
