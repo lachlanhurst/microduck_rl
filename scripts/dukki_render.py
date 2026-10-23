@@ -47,6 +47,7 @@ def main():
     ap.add_argument("--elevation", type=float, default=-18.0)
     ap.add_argument("--label", default="", help="title line in the overlay")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--csv", help="also write every step here: time, segment, height, speeds, motor torques")
     ap.add_argument(
         "--start",
         choices=("task", "sitting", "standing"),
@@ -120,6 +121,10 @@ def main():
     writer = imageio.get_writer(args.out, fps=fps, codec="libx264", quality=8, macro_block_size=8)
     obs = wrapped.get_observations()
     look = None
+    log = open(args.csv, "w") if args.csv else None
+    if log:
+        log.write("t,segment,vx_cmd,height,vx,vy,yaw_rate," + ",".join(f"tau_{n.replace(' ', '_')}" for n in names) + "\n")
+    t = 0.0
     with torch.no_grad():
         for name, vx, vy, yaw, secs in segments:
             for _ in range(int(round(secs / env.step_dt))):
@@ -141,6 +146,13 @@ def main():
                 w = robot.data.root_link_ang_vel_b[0, 2].item()
                 tau = act.reported_torque[0].abs().numpy()
                 top = np.argsort(-tau)[:3]
+                t += env.step_dt
+                if log:
+                    log.write(
+                        f"{t:.3f},{name},{vx:g},{mj_data.xpos[trunk][2]:.4f},{v[0]:.3f},{v[1]:.3f},{w:.3f},"
+                        + ",".join(f"{x:.3f}" for x in tau)
+                        + "\n"
+                    )
                 lines = [
                     args.label,
                     f"{name:6s} command vx {vx:+.2f} vy {vy:+.2f} m/s  yaw {yaw:+.2f} rad/s",
@@ -155,6 +167,8 @@ def main():
                     draw.text((12, 8 + 26 * i), line, fill=colour, font=font)
                 writer.append_data(np.asarray(frame))
     writer.close()
+    if log:
+        log.close()
     env.close()
     print(f"wrote {args.out} ({total:.0f} s at {fps} fps)")
 
