@@ -47,6 +47,12 @@ def main():
     ap.add_argument("--elevation", type=float, default=-18.0)
     ap.add_argument("--label", default="", help="title line in the overlay")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--start",
+        choices=("task", "sitting", "standing"),
+        default="task",
+        help="starting posture where the task mixes them (sit-stand): its own random mix, or forced",
+    )
     args = ap.parse_args()
 
     segments = []
@@ -58,6 +64,15 @@ def main():
     cfg = load_env_cfg(args.task)
     cfg.scene.num_envs = 1
     cfg.episode_length_s = total + 10.0
+    ground = cfg.events.get("set_ground_state")
+    if args.start != "task":
+        if ground is None:
+            raise SystemExit(f"--start {args.start}: {args.task} has no set_ground_state reset to force")
+        sitting = args.start == "sitting"
+        for key in ("face_down_prob", "face_up_prob"):
+            ground.params[key] = 0.0
+        ground.params["sitting_prob"] = 1.0 if sitting else 0.0
+        ground.params["standing_prob"] = 0.0 if sitting else 1.0
     removed = [k for k in cfg.events if "push" in k or "topple" in k]
     for name in removed:
         del cfg.events[name]
