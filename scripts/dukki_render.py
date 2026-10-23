@@ -37,7 +37,7 @@ DEFAULT_SEQUENCE = ["stand:0:0:0:4", "walk:0.2:0:0:5", "turn:0:0:1.0:5"]
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--task", default="Mjlab-Velocity-Flat-Dukki")
-    ap.add_argument("--checkpoint", required=True)
+    ap.add_argument("--checkpoint", required=True, help="model_N.pt, or an exported .onnx policy")
     ap.add_argument("--out", default="dukki.mp4")
     ap.add_argument("--sequence", nargs="+", default=DEFAULT_SEQUENCE)
     ap.add_argument("--width", type=int, default=1280)
@@ -86,9 +86,21 @@ def main():
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     rl_cfg = load_rl_cfg(args.task)
     wrapped = RslRlVecEnvWrapper(env, clip_actions=rl_cfg.clip_actions)
-    runner = (load_runner_cls(args.task) or OnPolicyRunner)(wrapped, asdict(rl_cfg), device="cpu")
-    runner.load(args.checkpoint, map_location="cpu")
-    policy = runner.get_inference_policy(device="cpu")
+    if args.checkpoint.endswith(".onnx"):
+        # An exported policy (61-D obs in, 14 actions out), e.g. one of Pollen's: one env, so
+        # the batch-1 graph runs as is.
+        import onnxruntime as ort
+
+        session = ort.InferenceSession(args.checkpoint)
+        input_name = session.get_inputs()[0].name
+
+        def policy(obs):
+            x = obs["actor"].numpy().astype("float32")
+            return torch.as_tensor(session.run(None, {input_name: x})[0])
+    else:
+        runner = (load_runner_cls(args.task) or OnPolicyRunner)(wrapped, asdict(rl_cfg), device="cpu")
+        runner.load(args.checkpoint, map_location="cpu")
+        policy = runner.get_inference_policy(device="cpu")
 
     env.reset(seed=args.seed)
     robot = env.scene["robot"]
