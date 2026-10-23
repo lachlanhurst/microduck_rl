@@ -50,9 +50,9 @@ def main():
     ap.add_argument("--csv", help="also write every step here: time, segment, height, speeds, motor torques")
     ap.add_argument(
         "--start",
-        choices=("task", "sitting", "standing"),
+        choices=("task", "sitting", "standing", "face_down", "face_up"),
         default="task",
-        help="starting posture where the task mixes them (sit-stand): its own random mix, or forced",
+        help="starting posture where the task mixes them (sit-stand, stand-up): its own random mix, or forced",
     )
     args = ap.parse_args()
 
@@ -69,11 +69,11 @@ def main():
     if args.start != "task":
         if ground is None:
             raise SystemExit(f"--start {args.start}: {args.task} has no set_ground_state reset to force")
-        sitting = args.start == "sitting"
-        for key in ("face_down_prob", "face_up_prob"):
-            ground.params[key] = 0.0
-        ground.params["sitting_prob"] = 1.0 if sitting else 0.0
-        ground.params["standing_prob"] = 0.0 if sitting else 1.0
+        for key in ("face_down", "face_up", "sitting", "standing"):
+            ground.params[f"{key}_prob"] = 1.0 if args.start == key else 0.0
+        # A curriculum that rewrites the mix (stand-up) would undo the forced start.
+        for name in [k for k, t in cfg.curriculum.items() if (t.params or {}).get("event_name") == "set_ground_state"]:
+            del cfg.curriculum[name]
     removed = [k for k in cfg.events if "push" in k or "topple" in k]
     for name in removed:
         del cfg.events[name]
