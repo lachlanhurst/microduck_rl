@@ -328,3 +328,39 @@ def make_still_practice(cfg: ManagerBasedRlEnvCfg, prob: float = STILL_PROB) -> 
     if "seated_head_jerk" in cfg.events:
         cfg.events["seated_head_jerk"].func = head_jerk_unless_still
     return cfg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stand-up taught by Pollen's stand expert
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Pollen's deployed stand-up policy (Hub ``pollen-robotics/microduck-policies``,
+#: ``alpha_stand.onnx``, run 69u48n8l at 9750), kept out of the repository. On
+#: the Dukki model at kp 1 it gets up from face down in 0.56 s and face up in
+#: 0.86 s (23/10/2026), where the first Dukki stand-up run, unaided, settled
+#: into a crouch propped on its head (trunk 113 mm, tilted 33 deg).
+STAND_EXPERT_DEFAULT = "logs/hf/microduck-policies/alpha_stand.onnx"
+
+#: Frames tilted past this are taught by the expert. Below the velstand recipe's
+#: 35 deg, because the head prop sits at 33 deg; under 20 deg counts as upright
+#: and is left to PPO (body pose control included).
+STAND_EXPERT_GATE_DEG = 20.0
+
+
+def make_dukki_standup_distill_rl_cfg(base):
+    """``base`` (the stand-up runner cfg) with PPO plus behaviour cloning from the stand
+    expert on tilted frames: no walk anchor. The expert path is ``DUKKI_STAND_EXPERT``."""
+    from dataclasses import fields, replace
+
+    from mjlab_microduck.tasks.distill import PpoWithExpertBcCfg, default_bc_cfg
+
+    algo = {f.name: getattr(base.algorithm, f.name) for f in fields(base.algorithm) if f.name != "class_name"}
+    bc_cfg = {
+        **default_bc_cfg(),
+        "wandb_run_path": None,
+        "checkpoint_path": os.environ.get("DUKKI_STAND_EXPERT", STAND_EXPERT_DEFAULT),
+        "gate_tilt_deg": STAND_EXPERT_GATE_DEG,
+        "anchor_coef": 0.0,
+        "anchor_wandb_run_path": None,
+    }
+    return replace(base, algorithm=PpoWithExpertBcCfg(**algo, bc_cfg=bc_cfg), run_name="dukki_stand_distill")

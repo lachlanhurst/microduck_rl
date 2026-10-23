@@ -225,6 +225,51 @@ def load_expert_from(actor: torch.nn.Module, state_dict: dict) -> torch.nn.Modul
     return expert
 
 
+class OnnxActorExpert(torch.nn.Module):
+    """An exported policy (``scripts/export.py``: obs normalizer then the MLP) rebuilt as a
+    frozen torch module, so an expert can come from a deployed ``.onnx`` when its rsl_rl
+    checkpoint is not to hand (Pollen's policies on the Hub). Called like the actor, on a
+    TensorDict of obs groups, concatenated in the actor's order."""
+
+    def __init__(self, path: Path, obs_groups: list[str]) -> None:
+        super().__init__()
+        import onnx
+        from onnx import numpy_helper
+
+        model = onnx.load(str(path))
+        init = {i.name: torch.from_numpy(numpy_helper.to_array(i).copy()) for i in model.graph.initializer}
+        nodes = list(model.graph.node)
+        ops = [n.op_type for n in nodes]
+        if ops[:2] != ["Sub", "Div"] or any(op not in ("Gemm", "Elu") for op in ops[2:]):
+            raise ValueError(f"{path}: expected Sub, Div, then Gemm/Elu layers, got {ops}")
+        self.obs_groups = list(obs_groups)
+        self.register_buffer("mean", init[nodes[0].input[1]].reshape(-1))
+        self.register_buffer("div", init[nodes[1].input[1]].reshape(-1))
+        layers: list[torch.nn.Module] = []
+        for n in nodes[2:]:
+            if n.op_type == "Elu":
+                alpha = next((a.f for a in n.attribute if a.name == "alpha"), 1.0)
+                layers.append(torch.nn.ELU(alpha))
+                continue
+            attrs = {a.name: (a.i if a.type == a.INT else a.f) for a in n.attribute}
+            w, b = init[n.input[1]], init[n.input[2]]
+            if not attrs.get("transB", 0):
+                w = w.t()
+            alpha, beta = attrs.get("alpha", 1.0), attrs.get("beta", 1.0)
+            lin = torch.nn.Linear(w.shape[1], w.shape[0])
+            lin.weight.data.copy_(alpha * w)
+            lin.bias.data.copy_(beta * b)
+            layers.append(lin)
+        self.mlp = torch.nn.Sequential(*layers)
+        self.eval()
+        for p in self.parameters():
+            p.requires_grad_(False)
+
+    def forward(self, obs: TensorDict) -> torch.Tensor:
+        flat = torch.cat([obs[g] for g in self.obs_groups], dim=-1)
+        return self.mlp((flat - self.mean) / self.div)
+
+
 def _resolve_checkpoint(bc_cfg: dict, prefix: str = "") -> Path | None:
     """Local ``<prefix>checkpoint_path`` if given, else download ``<prefix>wandb_run_path``."""
     if bc_cfg.get(f"{prefix}checkpoint_path"):
@@ -246,8 +291,13 @@ class PpoWithExpertBc(PPO):
         self.expert = None
         self.anchor = None
         if bc_cfg:
-            ckpt = torch.load(_resolve_checkpoint(bc_cfg), map_location=self.device, weights_only=False)
-            self.expert = load_expert_from(self.actor, ckpt["actor_state_dict"]).to(self.device)
+            path = _resolve_checkpoint(bc_cfg)
+            if path.suffix == ".onnx":
+                ckpt = {"iter": path.name}
+                self.expert = OnnxActorExpert(path, list(self.actor.obs_groups)).to(self.device)
+            else:
+                ckpt = torch.load(path, map_location=self.device, weights_only=False)
+                self.expert = load_expert_from(self.actor, ckpt["actor_state_dict"]).to(self.device)
             anchor_path = _resolve_checkpoint(bc_cfg, "anchor_") if bc_cfg.get("anchor_coef", 0.0) > 0 else None
             if anchor_path is not None:
                 ack = torch.load(anchor_path, map_location=self.device, weights_only=False)

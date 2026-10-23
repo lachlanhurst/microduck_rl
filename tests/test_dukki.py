@@ -176,3 +176,28 @@ def test_dukki_tasks_penalise_commands_past_the_stop():
     # The allowance follows the gains, so a gain sweep keeps the same torque cap.
     cfg = make_dukki_variant(make_microduck_velocity_env_cfg(), kp=4.0)
     assert cfg.rewards["action_over_limit"].params["overshoot"] == pytest.approx(OVER_LIMIT_TORQUE / 4.0)
+
+
+def test_onnx_expert_matches_onnxruntime():
+    """The stand expert rebuilt from Pollen's ONNX must give the exported policy's actions."""
+    import pathlib
+
+    import numpy as np
+    import pytest
+    from tensordict import TensorDict
+
+    path = pathlib.Path("logs/hf/microduck-policies/alpha_stand.onnx")
+    if not path.exists():
+        pytest.skip("alpha_stand.onnx not downloaded")
+    import onnxruntime as ort
+
+    from mjlab_microduck.tasks.distill import OnnxActorExpert
+
+    expert = OnnxActorExpert(path, ["actor"])
+    session = ort.InferenceSession(str(path))
+    rng = np.random.default_rng(0)
+    for _ in range(5):
+        x = rng.normal(size=(1, 61)).astype(np.float32)
+        want = session.run(None, {"obs": x})[0]
+        got = expert(TensorDict({"actor": torch.from_numpy(x)}, batch_size=[1])).numpy()
+        assert np.allclose(got, want, atol=1e-5)
