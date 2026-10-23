@@ -283,7 +283,7 @@ for _task_id, _make_cfg, _kw, _rl_cfg, _robot_cfg in _BACKLASH_TASKS:
 # actuator, J288/6S/head-electronics masses, rotor-side joint obs. Ids mirror
 # the base ids with "-Dukki" in place of "-MicroDuck". Gains come from
 # DUKKI_KP / DUKKI_KD at import (gain sweeps), joint_vel from DUKKI_JOINT_VEL.
-from .dukki import make_dukki_variant
+from .dukki import make_dukki_variant, make_still_practice
 from .j288_testbench_env_cfg import J288TestbenchRlCfg, make_j288_testbench_env_cfg
 
 # (task_id, make_fn, make_kwargs, rl_cfg, model, backlash). model is the MJCF
@@ -298,11 +298,14 @@ _DUKKI_TASKS = (
     ("Mjlab-StandUp-Flat-Dukki", make_microduck_standup_env_cfg, {}, MicroduckStandUpRlCfg, "standup", False),
     ("Mjlab-SitStand-Flat-Dukki", make_microduck_sitstand_env_cfg, {}, MicroduckSitStandRlCfg, "standup", False),
 )
+# Tasks that also give a share of robots episodes with the head still and no pushes.
+_DUKKI_STILL_PRACTICE = {"Mjlab-SitStand-Flat-Dukki"}
 for _task_id, _make_cfg, _kw, _rl_cfg, _model, _backlash in _DUKKI_TASKS:
+    _extra = make_still_practice if _task_id in _DUKKI_STILL_PRACTICE else (lambda c: c)
     register_mjlab_task(
         task_id=_task_id,
-        env_cfg=make_dukki_variant(_make_cfg(**_kw), model=_model, backlash=_backlash),
-        play_env_cfg=make_dukki_variant(_make_cfg(play=True, **_kw), model=_model, backlash=_backlash),
+        env_cfg=_extra(make_dukki_variant(_make_cfg(**_kw), model=_model, backlash=_backlash)),
+        play_env_cfg=_extra(make_dukki_variant(_make_cfg(play=True, **_kw), model=_model, backlash=_backlash)),
         rl_cfg=_rl_cfg,
         runner_cls=MicroduckOnPolicyRunner,
     )

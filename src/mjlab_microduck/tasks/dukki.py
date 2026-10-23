@@ -49,7 +49,8 @@ from copy import deepcopy
 import torch
 from mjlab.entity import Entity
 from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.managers import RewardTermCfg
+from mjlab.envs import mdp as mjlab_mdp
+from mjlab.managers import EventTermCfg, RewardTermCfg
 from mjlab.managers.manager_base import ManagerTermBase
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
@@ -257,4 +258,73 @@ def make_dukki_variant(
             weight=OVER_LIMIT_WEIGHT,
             params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
         )
+    return cfg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sit-stand: practice from stillness
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Share of sit-stand robots that are "still" for an episode: head command held
+#: at 0, no pushes, no head jerks. The first Dukki sit-stand run (23/10/2026)
+#: sat from standing 88% of the time under training conditions but 63% with the
+#: head still and no pushes: it leaned on outside motion to start the descent,
+#: and on the robot the head is often still when it is told to sit.
+STILL_PROB = 0.5
+
+
+def _still(env) -> torch.Tensor:
+    still = getattr(env, "_dukki_still", None)
+    if still is None:
+        still = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        env._dukki_still = still
+    return still
+
+
+def _all_ids(env, env_ids) -> torch.Tensor:
+    if env_ids is None or isinstance(env_ids, slice):
+        return torch.arange(env.num_envs, device=env.device)
+    return env_ids.to(env.device, dtype=torch.long)
+
+
+def sample_still_envs(env, env_ids, prob: float) -> None:
+    """Reset event: marks each resetting robot still with probability ``prob``."""
+    ids = _all_ids(env, env_ids)
+    _still(env)[ids] = torch.rand(len(ids), device=env.device) < prob
+
+
+def hold_head_still(env, env_ids, head_command_name: str = "head_pose") -> None:
+    """Step event: still robots' head command stays at 0. Runs after the command manager's
+    resample and before interval events, which skip still robots themselves."""
+    still = _still(env)
+    if head_command_name in env.command_manager.active_terms and still.any():
+        env.command_manager.get_term(head_command_name)._command[still] = 0.0
+
+
+def push_unless_still(env, env_ids, **params) -> None:
+    """``push_by_setting_velocity`` for the robots that are not still."""
+    ids = _all_ids(env, env_ids)
+    ids = ids[~_still(env)[ids]]
+    if len(ids):
+        mjlab_mdp.push_by_setting_velocity(env, ids, **params)
+
+
+def head_jerk_unless_still(env, env_ids, **params) -> None:
+    """``seated_head_command_jerk`` for the robots that are not still."""
+    ids = _all_ids(env, env_ids)
+    ids = ids[~_still(env)[ids]]
+    if len(ids):
+        microduck_mdp.seated_head_command_jerk(env, ids, **params)
+
+
+def make_still_practice(cfg: ManagerBasedRlEnvCfg, prob: float = STILL_PROB) -> ManagerBasedRlEnvCfg:
+    """Gives a share of sit-stand robots episodes with no head motion and no pushes, so the
+    policy learns to sit from a still stand. The push and head-jerk events keep their
+    parameters, so their curricula still apply to the other robots."""
+    cfg.events["sample_still"] = EventTermCfg(func=sample_still_envs, mode="reset", params={"prob": prob})
+    cfg.events["hold_head_still"] = EventTermCfg(func=hold_head_still, mode="step", params={})
+    if "push_robot" in cfg.events:
+        cfg.events["push_robot"].func = push_unless_still
+    if "seated_head_jerk" in cfg.events:
+        cfg.events["seated_head_jerk"].func = head_jerk_unless_still
     return cfg
