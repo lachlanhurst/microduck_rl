@@ -135,7 +135,7 @@ def main():
     look = None
     log = open(args.csv, "w") if args.csv else None
     if log:
-        log.write("t,segment,vx_cmd,height,vx,vy,yaw_rate," + ",".join(f"tau_{n.replace(' ', '_')}" for n in names) + "\n")
+        log.write("t,segment,vx_cmd,height,tilt_deg,vx,vy,yaw_rate," + ",".join(f"tau_{n.replace(' ', '_')}" for n in names) + "\n")
     t = 0.0
     with torch.no_grad():
         for name, vx, vy, yaw, secs in segments:
@@ -164,7 +164,11 @@ def main():
                 t += env.step_dt
                 if log:
                     log.write(
-                        f"{t:.3f},{name},{vx:g},{mj_data.xpos[trunk][2]:.4f},{v[0]:.3f},{v[1]:.3f},{w:.3f},"
+                        # Tilt: the trunk's z axis from vertical. A body propped on its head
+                        # can reach standing height while pitched well over.
+                        f"{t:.3f},{name},{vx:g},{mj_data.xpos[trunk][2]:.4f},"
+                        f"{np.degrees(np.arccos(np.clip(mj_data.xmat[trunk][8], -1, 1))):.1f},"
+                        f"{v[0]:.3f},{v[1]:.3f},{w:.3f},"
                         + ",".join(f"{x:.3f}" for x in tau)
                         + "\n"
                     )
