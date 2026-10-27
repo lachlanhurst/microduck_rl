@@ -14,8 +14,12 @@ setting: foot clearance (the higher foot's lowest point above its standing heigh
 up), airborne time (both feet up), the trunk's rise, whether it ends upright, and peak motor
 torque.
 
-    DUKKI_KP=1 DUKKI_KD=0.05 uv run scripts/dukki_jump_probe.py --find-squat
-    DUKKI_KP=1 DUKKI_KD=0.05 uv run scripts/dukki_jump_probe.py --hip-sign -1 --ankle-sign 1
+    DUKKI_KP=4 DUKKI_KD=0.05 uv run scripts/dukki_jump_probe.py --find-squat
+    DUKKI_KP=4 DUKKI_KD=0.05 uv run scripts/dukki_jump_probe.py --hip-sign 1 --ankle-sign 1
+
+Run it stiff (kp 4 here) so an open-loop script reaches the torques a policy would by aiming
+past its target; the motor torque clamp is the same at any kp. At kp 1 a held crouch sags until
+the error makes the torque and every squat collapsed. On Dukki the squat is hip +1, ankle +1.
 """
 
 from __future__ import annotations
@@ -70,7 +74,8 @@ def run(env, actions_fn, steps: int):
     """Steps the env with actions_fn(k) -> (n, 14); returns per-step trunk z, foot z, tilt, torque."""
     robot = env.scene["robot"]
     act = robot.actuators[0]
-    feet = [i for i, b in enumerate(robot.body_names) if "foot" in b and "collision" not in b][:2]
+    # The lowest bodies: the ankle links carry the soles (Microduck and Dukki models).
+    feet = [i for i, b in enumerate(robot.body_names) if b in ("ankle_left", "ankle_right")]
     log = {"z": [], "foot": [], "tilt": [], "x": [], "tau": []}
     for k in range(steps):
         env.step(actions_fn(k))
