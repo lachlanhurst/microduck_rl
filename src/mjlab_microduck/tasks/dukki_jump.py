@@ -122,6 +122,9 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
 class JumpCommandCfg(microduck_mdp.VelocityCommandCommandOnlyCfg):
     class_type: type = JumpCommand
 
+    def build(self, env) -> JumpCommand:
+        return JumpCommand(self, env)
+
 
 def _jump(env) -> JumpCommand:
     return env.command_manager.get_term("twist")
@@ -191,7 +194,6 @@ def make_dukki_jump_env_cfg(play: bool = False):
     # The jump request and state, in the twist slot.
     twist = cfg.commands["twist"]
     twist.resampling_time_range = (1e6, 1e6)
-    # Without the old cfg's class_type, which would otherwise build the old command class.
     cfg.commands["twist"] = JumpCommandCfg(**{k: v for k, v in vars(twist).items() if k != "class_type"})
 
     # Rewards: keep the regularisers, replace the stand-up task terms.
