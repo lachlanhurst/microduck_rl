@@ -14,8 +14,11 @@ State (JumpCommand, updated every step after physics):
   flight     both feet off the ground, the trunk near standing height and tilted under
              FLIGHT_MAX_TILT_DEG (a robot toppling over lifts its feet too; that is not flight)
   first      the first flight that starts inside the window (or GRACE_S after it)
-  launch_ok  latched at that take-off: tilted under TAKEOFF_MAX_TILT_DEG. A jump launched from a
-             collapse does not pay (the backflip branch's launch-attitude lesson)
+  launch_ok  latched at that take-off: the trunk stayed under TAKEOFF_MAX_TILT_DEG from the request
+             through take-off. A jump launched from a collapse does not pay (the backflip branch's
+             launch-attitude lesson). Judged over the whole approach, not at the instant the feet
+             leave: a squat-and-push pitches the trunk to about 20 deg by then (the probe's jump,
+             2-4 deg in the squat), and a 15 deg check there failed every one of them
   landed     the first flight has ended
 
 Teacher (make_dukki_jump_rl_cfg): the first run, unaided from scratch, found that collapsing into a
@@ -25,6 +28,13 @@ from Pollen's stand expert, iteration 3500, which gets up from anything and stan
 now teaches every frame without a jump request and every frame tilted past 35 deg, by behaviour
 cloning on the student's own frames; the request window, upright, is PPO's.
 
+Run 2 (taught, 27/10/2026) jumped: trunk 36 to 44 mm above standing, one jump, balanced landings.
+But it did not squat at all (lowest point before take-off within 1 mm of standing): it jumped off
+nearly straight legs by throwing the heavy head, head pitch and yaw at the torque clamp, and the
+sideways part twisted the body, 47 to 77 deg of heading per jump on two robots in three. So for
+run 3: the heading is held after landing, the head may not yaw or roll during the jump, a second
+hop costs about what the first earns, and a squat of trunk and head before a real jump pays.
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
@@ -32,6 +42,13 @@ Rewards (scaled by dt like every mjlab term):
                   that finds the push
   jump_flight     per step of the first flight, if launch_ok: 1 plus the trunk height above
                   standing in units of FLIGHT_HEIGHT_UNIT
+  jump_squat      once, at the landing of a first flight from an upright take-off: the squat
+                  before take-off, the mean drop of the trunk and the head below their heights
+                  when the jump was asked for, full at SQUAT_FULL_M. A squat with no jump earns
+                  nothing, so it cannot become a place to rest (run 1's collapse)
+  jump_heading    once landed, every step: the heading's error from when the jump was asked for
+  jump_head_twist head yaw and roll speed, squared, from the request until landing (neck and head
+                  pitch stay free: the head going down is part of the squat)
   jump_extra      any airborne step that is not the first flight
   jump_missed     after the window, if it never flew
   fall            the fall termination
@@ -57,9 +74,11 @@ WINDOW_S = 1.0
 GRACE_S = 0.3  # a take-off this soon after the window still counts as the jump
 FLIGHT_MAX_TILT_DEG = 30.0
 FLIGHT_MIN_Z = STAND_Z - 0.02
-TAKEOFF_MAX_TILT_DEG = 15.0
+TAKEOFF_MAX_TILT_DEG = 25.0
 FLIGHT_HEIGHT_UNIT = 0.02  # m of trunk height above standing per extra unit of flight reward
 FALL_TILT_DEG = 60.0
+SQUAT_FULL_M = 0.025  # trunk and head squat for the full bonus: about the probe's best crouch
+HEAD_BODY = "jaw_soft"  # top of the neck chain, 225 mm when standing
 
 
 def _tilt_deg(robot) -> torch.Tensor:
@@ -81,6 +100,19 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         self.launch_ok = torch.zeros(n, dtype=torch.bool, device=dev)
         self.landed = torch.zeros(n, dtype=torch.bool, device=dev)
         self.flights = torch.zeros(n, dtype=torch.long, device=dev)
+        # Latched when the jump is asked for: heading, trunk and head heights.
+        self.requested = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.heading_ref = torch.zeros(n, device=dev)
+        self.trunk_ref = torch.zeros(n, device=dev)
+        self.head_ref = torch.zeros(n, device=dev)
+        # The squat: the lowest trunk and head since the request, until take-off.
+        self.trunk_low = torch.zeros(n, device=dev)
+        self.head_low = torch.zeros(n, device=dev)
+        # True on the step a first flight from an upright take-off lands.
+        self.landed_now = torch.zeros(n, dtype=torch.bool, device=dev)
+        # The trunk's worst tilt from the request until take-off.
+        self.approach_tilt = torch.zeros(n, device=dev)
+        self._head_id = None
 
     @property
     def in_window(self) -> torch.Tensor:
@@ -94,17 +126,39 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         lo, hi = WAIT_S
         self.t[env_ids] = 0.0
         self.t_jump[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(lo, hi)
-        for flag in (self.flight, self.first, self.launch_ok, self.landed):
+        for flag in (self.flight, self.first, self.launch_ok, self.landed, self.requested, self.landed_now):
             flag[env_ids] = False
+        self.approach_tilt[env_ids] = 0.0
         self.flights[env_ids] = 0
         self.vel_command_b[env_ids] = 0.0
+
+    @property
+    def squat_depth(self) -> torch.Tensor:
+        """Mean drop of the trunk and the head below their heights at the request, m."""
+        return 0.5 * ((self.trunk_ref - self.trunk_low) + (self.head_ref - self.head_low)).clamp_min(0.0)
 
     def _update_command(self) -> None:
         env = self._env_ref
         robot = env.scene["robot"]
+        if self._head_id is None:
+            self._head_id = list(robot.body_names).index(HEAD_BODY)
         self.t += env.step_dt
-        feet_down = env.scene.sensors["feet_ground_contact"].data.found[:, :2].bool().any(dim=1)
+        z_trunk = robot.data.root_link_pos_w[:, 2]
+        z_head = robot.data.body_link_pos_w[:, self._head_id, 2]
+        newly = self.in_window & ~self.requested
+        self.requested |= newly
+        self.heading_ref = torch.where(newly, robot.data.heading_w, self.heading_ref)
+        self.trunk_ref = torch.where(newly, z_trunk, self.trunk_ref)
+        self.head_ref = torch.where(newly, z_head, self.head_ref)
         tilt = _tilt_deg(robot)
+        self.approach_tilt = torch.where(newly, tilt, self.approach_tilt)
+        self.trunk_low = torch.where(newly, z_trunk, self.trunk_low)
+        self.head_low = torch.where(newly, z_head, self.head_low)
+        squatting = self.requested & (self.flights == 0)
+        self.trunk_low = torch.where(squatting, torch.minimum(self.trunk_low, z_trunk), self.trunk_low)
+        self.head_low = torch.where(squatting, torch.minimum(self.head_low, z_head), self.head_low)
+        self.approach_tilt = torch.where(squatting, torch.maximum(self.approach_tilt, tilt), self.approach_tilt)
+        feet_down = env.scene.sensors["feet_ground_contact"].data.found[:, :2].bool().any(dim=1)
         z = robot.data.root_link_pos_w[:, 2]
         flight_now = ~feet_down & (z > FLIGHT_MIN_Z) & (tilt < FLIGHT_MAX_TILT_DEG)
         takeoff = flight_now & ~self.flight
@@ -112,8 +166,9 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         eligible = (self.t >= self.t_jump) & (self.t < self.t_jump + WINDOW_S + GRACE_S) & (self.flights == 0)
         starts_first = takeoff & eligible
         self.first |= starts_first
-        self.launch_ok |= starts_first & (tilt < TAKEOFF_MAX_TILT_DEG)
+        self.launch_ok |= starts_first & (torch.maximum(self.approach_tilt, tilt) < TAKEOFF_MAX_TILT_DEG)
         ended_first = touchdown & self.first
+        self.landed_now = ended_first & self.launch_ok
         self.landed |= ended_first
         self.first &= ~ended_first
         self.flights += takeoff.long()
@@ -177,6 +232,32 @@ def jump_extra(env) -> torch.Tensor:
     return (cmd.flight & ~cmd.first).float()
 
 
+def jump_squat(env) -> torch.Tensor:
+    """Once, at the landing of a first flight from an upright take-off: the squat before it, as a
+    share of SQUAT_FULL_M (capped at 1)."""
+    cmd = _jump(env)
+    return (cmd.squat_depth / SQUAT_FULL_M).clamp(0.0, 1.0) * cmd.landed_now.float()
+
+
+def jump_heading(env) -> torch.Tensor:
+    """Once landed and on the ground, every step: |heading - heading when the jump was asked|, rad."""
+    cmd = _jump(env)
+    d = env.scene["robot"].data.heading_w - cmd.heading_ref
+    err = torch.atan2(torch.sin(d), torch.cos(d)).abs()
+    return err * (cmd.landed & ~cmd.flight).float()
+
+
+def jump_head_twist(env) -> torch.Tensor:
+    """Head yaw and roll speed squared, from the request until landing."""
+    cmd = _jump(env)
+    robot = env.scene["robot"]
+    act = robot.actuators[0]
+    names = list(act.target_names)
+    ids = [act._target_ids_list[names.index(n)] for n in ("head_yaw", "head_roll")]
+    speed2 = robot.data.joint_vel[:, ids].pow(2).sum(dim=1)
+    return speed2 * (cmd.requested & ~cmd.landed).float()
+
+
 def jump_missed(env) -> torch.Tensor:
     """After the window, if it never flew."""
     cmd = _jump(env)
@@ -213,7 +294,10 @@ def make_dukki_jump_env_cfg(play: bool = False):
     cfg.rewards["jump_stand"] = RewardTermCfg(func=jump_stand, weight=2.0)
     cfg.rewards["jump_push"] = RewardTermCfg(func=jump_push, weight=10.0)
     cfg.rewards["jump_flight"] = RewardTermCfg(func=jump_flight, weight=50.0)
-    cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=-20.0)
+    cfg.rewards["jump_squat"] = RewardTermCfg(func=jump_squat, weight=10.0 / 0.02)  # once, undoing dt
+    cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=-5.0)
+    cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=-0.05)
+    cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=-100.0)
     cfg.rewards["jump_missed"] = RewardTermCfg(func=jump_missed, weight=-2.0)
     cfg.rewards["fall"] = RewardTermCfg(func=mdp.is_terminated, weight=-10.0 / 0.02)  # once, undoing dt
 
