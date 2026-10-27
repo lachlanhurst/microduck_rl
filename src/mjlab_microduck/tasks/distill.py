@@ -118,6 +118,12 @@ def default_bc_cfg() -> dict:
         # from the 35° BC gate broke the END of the rise (the expert needs its joints there).
         "expert_mask_cols": (),
         "expert_mask_tilt_deg": 75.0,
+        # Frames whose twist command slot is exactly zero are also taught by the expert (command
+        # obs carry no noise, so the test is exact). For a trick task whose request rides in the
+        # twist slot (the Dukki jump), that hands every frame without a request to a stand expert:
+        # the stance before, the stance after and the recovery, while the request window is
+        # left to PPO unless tilted past the gate.
+        "teach_command_zero": False,
     }
 
 
@@ -336,6 +342,11 @@ class PpoWithExpertBc(PPO):
                  "expert_bc_body_teach_frac": body_teach.float().mean().item(),
                  "expert_bc_turn_free_frac": turn_free.float().mean().item()}
         tilted = fallen_mask_from_obs(flat, gsl, cfg.get("expert_mask_tilt_deg", 75.0)) & fallen  # expert_mask_cols rows
+        if cfg.get("teach_command_zero"):
+            tw = flat[:, cfg["twist_slice"][0]:cfg["twist_slice"][1]]
+            no_command = tw.abs().amax(dim=1) <= 1e-6
+            stats["expert_bc_no_command_frac"] = no_command.float().mean().item()
+            fallen = fallen | no_command
         fallen = fallen | body_teach
         if fallen.sum().item() < cfg["min_samples"]:
             fallen = torch.zeros_like(fallen)  # too few fallen frames: anchor-only pass (or nothing)

@@ -18,6 +18,13 @@ State (JumpCommand, updated every step after physics):
              collapse does not pay (the backflip branch's launch-attitude lesson)
   landed     the first flight has ended
 
+Teacher (make_dukki_jump_rl_cfg): the first run, unaided from scratch, found that collapsing into a
+crouch at 60 mm in the first 0.4 s avoids the fall penalty, and the narrow stand product gave a
+collapsed robot no gradient back: no stand, so never a jump. The Dukki stand-up policy (distilled
+from Pollen's stand expert, iteration 3500, which gets up from anything and stands still at kp 1)
+now teaches every frame without a jump request and every frame tilted past 35 deg, by behaviour
+cloning on the student's own frames; the request window, upright, is PPO's.
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
@@ -130,7 +137,7 @@ def _jump(env) -> JumpCommand:
     return env.command_manager.get_term("twist")
 
 
-def jump_stand(env, height_std: float = 0.015, tilt_std_deg: float = 10.0, pose_std: float = 0.3) -> torch.Tensor:
+def jump_stand(env, height_std: float = 0.03, tilt_std_deg: float = 15.0, pose_std: float = 0.3) -> torch.Tensor:
     """Balanced stand, as a product: height x upright x leg pose. Before the window, and once
     landed (and on the ground)."""
     cmd = _jump(env)
@@ -225,3 +232,35 @@ def make_dukki_jump_env_cfg(play: bool = False):
         ):
             del cfg.curriculum[name]
     return cfg
+
+
+#: The stand expert: the Dukki stand-up policy's rsl_rl checkpoint (same 61D actor). Kept outside
+#: the repository; on blackbox a copy of ..._dukki-standup-distill-kp1-kd0p05/model_3500.pt.
+JUMP_EXPERT_DEFAULT = "logs/experts/dukki_standup_3500.pt"
+
+
+def make_dukki_jump_rl_cfg(base):
+    """``base`` (the stand-up runner cfg) with the stand expert teaching every frame without a
+    jump request and every frame tilted past 35 deg. The path is ``DUKKI_JUMP_EXPERT``."""
+    import os
+    from dataclasses import fields, replace
+
+    from mjlab_microduck.tasks.distill import PpoWithExpertBcCfg, default_bc_cfg
+
+    algo = {f.name: getattr(base.algorithm, f.name) for f in fields(base.algorithm) if f.name != "class_name"}
+    bc_cfg = {
+        **default_bc_cfg(),
+        "wandb_run_path": None,
+        "checkpoint_path": os.environ.get("DUKKI_JUMP_EXPERT", JUMP_EXPERT_DEFAULT),
+        "gate_tilt_deg": 35.0,
+        "teach_command_zero": True,
+        "anchor_coef": 0.0,
+        "anchor_wandb_run_path": None,
+    }
+    return replace(
+        base,
+        algorithm=PpoWithExpertBcCfg(**algo, bc_cfg=bc_cfg),
+        experiment_name="dukki_jump",
+        run_name="dukki_jump",
+        max_iterations=3000,
+    )
