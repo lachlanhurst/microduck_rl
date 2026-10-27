@@ -149,7 +149,8 @@ def main():
     log, feet = run(env, actions, steps)
     foot0 = log["foot"][n_hold - 1]  # standing foot heights
     rise = (log["foot"] - foot0) * 1000  # (T, n, 2) mm
-    both_up = (rise > UP_MM).all(dim=2)
+    # Both feet up while the trunk is near upright: a robot toppling over lifts its feet too.
+    both_up = (rise > UP_MM).all(dim=2) & (log["tilt"] < 30)
     clearance = torch.where(both_up, rise.amin(dim=2), torch.zeros_like(both_up, dtype=torch.float)).amax(dim=0)
     airborne = both_up.float().sum(dim=0) * dt
     trunk_rise = (log["z"][t_push0:].amax(dim=0) - log["z"][n_hold - 1]) * 1000
