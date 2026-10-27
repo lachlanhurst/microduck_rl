@@ -310,6 +310,19 @@ for _task_id, _make_cfg, _kw, _rl_cfg, _model, _backlash in _DUKKI_TASKS:
         runner_cls=MicroduckOnPolicyRunner,
     )
 
+# Dukki jump: stand, jump once when asked (twist vx = 1), land standing (dukki_jump.py).
+from dataclasses import replace as _replace
+
+from .dukki_jump import make_dukki_jump_env_cfg
+
+register_mjlab_task(
+    task_id="Mjlab-Jump-Flat-Dukki",
+    env_cfg=make_dukki_variant(make_dukki_jump_env_cfg(), model="standup"),
+    play_env_cfg=make_dukki_variant(make_dukki_jump_env_cfg(play=True), model="standup"),
+    rl_cfg=_replace(MicroduckStandUpRlCfg, experiment_name="dukki_jump", run_name="dukki_jump", max_iterations=3000),
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
 # Dukki stand-up with Pollen's stand expert as a teacher on tilted frames (dukki.py).
 register_mjlab_task(
     task_id="Mjlab-StandUp-Flat-Dukki-Distill",
