@@ -191,7 +191,8 @@ def make_dukki_jump_env_cfg(play: bool = False):
     # The jump request and state, in the twist slot.
     twist = cfg.commands["twist"]
     twist.resampling_time_range = (1e6, 1e6)
-    cfg.commands["twist"] = JumpCommandCfg(**vars(twist))
+    # Without the old cfg's class_type, which would otherwise build the old command class.
+    cfg.commands["twist"] = JumpCommandCfg(**{k: v for k, v in vars(twist).items() if k != "class_type"})
 
     # Rewards: keep the regularisers, replace the stand-up task terms.
     keep = {
