@@ -55,8 +55,8 @@ Rewards (scaled by dt like every mjlab term):
                   pitch stay free: the head going down is part of the squat)
   jump_extra      airborne after the request that is not the first flight: a second hop after
                   landing, or a flight after the window
-  jump_hop_early  airborne before the request: a stumble off the ground while it should stand,
-                  priced lightly so that flailing early in training never costs more than a fall
+  jump_hop_early  airborne before the request: a stumble off the ground while it should stand, at
+                  run 2's -20, which is also what drives the early action noise down
   jump_missed     after the window, if it never flew
   fall            the fall termination
 Regularisers stay from the stand-up task: action rate, torque rate, angular velocity and
@@ -313,11 +313,13 @@ def make_dukki_jump_env_cfg(play: bool = False):
     cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=-5.0)
     cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=-0.05)
     cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=-100.0)
-    # Light: nothing pays for being airborne before the request and the stand reward stops while it
-    # is, so this only has to discourage hopping unasked. A noisy early policy (std 1.5) has both
-    # feet up at some point in its first 0.9 s on every robot: -20 cost it about 4.9 there, -100
-    # about 24, against 10 for a fall, and falling fast became the best deal.
-    cfg.rewards["jump_hop_early"] = RewardTermCfg(func=jump_hop_early, weight=-5.0)
+    # Run 2's price. Besides discouraging hopping unasked, it is what tells a noisy early policy to
+    # act less randomly: its flailing hops are charged, and calmer actions are the cheapest fix, so
+    # the action noise falls and the teacher's stance holds. Too strong and falling fast is cheaper
+    # (run 3 at -100: about -24 in the first 0.9 s at std 1.5 against -10 for a fall, and it fell on
+    # purpose); too weak and the noise never falls (run 3b at -5: entropy stayed at 16-17 through
+    # iteration 1750, episodes 0.9 s; run 2 at -20 was at 4 by iteration 300 and standing).
+    cfg.rewards["jump_hop_early"] = RewardTermCfg(func=jump_hop_early, weight=-20.0)
     cfg.rewards["jump_missed"] = RewardTermCfg(func=jump_missed, weight=-2.0)
     cfg.rewards["fall"] = RewardTermCfg(func=mdp.is_terminated, weight=-10.0 / 0.02)  # once, undoing dt
 
