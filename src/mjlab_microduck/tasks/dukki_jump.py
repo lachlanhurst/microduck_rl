@@ -55,7 +55,8 @@ Rewards (scaled by dt like every mjlab term):
                   pitch stay free: the head going down is part of the squat)
   jump_extra      airborne after the request that is not the first flight: a second hop after
                   landing, or a flight after the window
-  jump_hop_early  airborne before the request: a stumble off the ground while it should stand
+  jump_hop_early  airborne before the request: a stumble off the ground while it should stand,
+                  priced lightly so that flailing early in training never costs more than a fall
   jump_missed     after the window, if it never flew
   fall            the fall termination
 Regularisers stay from the stand-up task: action rate, torque rate, angular velocity and
@@ -312,7 +313,11 @@ def make_dukki_jump_env_cfg(play: bool = False):
     cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=-5.0)
     cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=-0.05)
     cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=-100.0)
-    cfg.rewards["jump_hop_early"] = RewardTermCfg(func=jump_hop_early, weight=-20.0)
+    # Light: nothing pays for being airborne before the request and the stand reward stops while it
+    # is, so this only has to discourage hopping unasked. A noisy early policy (std 1.5) has both
+    # feet up at some point in its first 0.9 s on every robot: -20 cost it about 4.9 there, -100
+    # about 24, against 10 for a fall, and falling fast became the best deal.
+    cfg.rewards["jump_hop_early"] = RewardTermCfg(func=jump_hop_early, weight=-5.0)
     cfg.rewards["jump_missed"] = RewardTermCfg(func=jump_missed, weight=-2.0)
     cfg.rewards["fall"] = RewardTermCfg(func=mdp.is_terminated, weight=-10.0 / 0.02)  # once, undoing dt
 
