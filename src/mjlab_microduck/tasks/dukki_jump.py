@@ -52,6 +52,10 @@ a take-off is real only with the trunk rising at TAKEOFF_MIN_VZ; only a real one
 or count as a flight, other airborne steps after the request are extra hops; and the flight pays
 only for height above standing. Resumed from run 3f's iteration 2250.
 
+Run 3g never took off in 350 iterations: 0.3 m/s from the start was out of reach of a policy that
+quiet. Run 3h: the take-off speed ramps from 0.1 to 0.3 (TAKEOFF_VZ_STAGES), and the resume from
+run 3f's 2250 resets the action std to 0.5 (MICRODUCK_RESET_ACTION_STD, mdp.py patch 6).
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
@@ -95,7 +99,14 @@ GRACE_S = 0.3  # a take-off this soon after the window still counts as the jump
 FLIGHT_MAX_TILT_DEG = 30.0
 FLIGHT_MIN_Z = STAND_Z - 0.02
 TAKEOFF_MAX_TILT_DEG = 25.0
-TAKEOFF_MIN_VZ = 0.3  # m/s, trunk vertical speed for a real take-off
+TAKEOFF_MIN_VZ = 0.3  # m/s, trunk vertical speed for a real take-off, once fully ramped in
+# The take-off speed by training iteration, (iteration, m/s). Run 3g, resumed from run 3f's 2250
+# with 0.3 from the start, never once took off in 350 iterations (action std 0.14): the missed
+# price is flat, and nothing paid a push that fell short. Starting at 0.1 pays the squat bonus
+# for a small push and the bar rises from there. A drop still cannot count: its speed is
+# downwards. The steps are absolute (a resume restores the step counter), set for a resume
+# from 2250; from scratch it stays at 0.1 until 2400.
+TAKEOFF_VZ_STAGES = ((0, 0.1), (2400, 0.15), (2600, 0.2), (2800, 0.25), (3000, TAKEOFF_MIN_VZ))
 FLIGHT_HEIGHT_UNIT = 0.02  # m of trunk height above standing per extra unit of flight reward
 FALL_TILT_DEG = 60.0
 # Weights by training iteration for the two prices that can make an early, noisy policy prefer to
@@ -155,6 +166,8 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         # The trunk's worst tilt from the request until take-off.
         self.approach_tilt = torch.zeros(n, device=dev)
         self._head_id = None
+        # Set by the takeoff_min_vz curriculum (TAKEOFF_VZ_STAGES).
+        self.takeoff_min_vz = TAKEOFF_VZ_STAGES[0][1]
 
     @property
     def in_window(self) -> torch.Tensor:
@@ -216,7 +229,7 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         # that counted as a flight (and its drop as the squat) with the trunk never back above
         # standing. Only real take-offs can be the jump or count towards ``flights``; any other
         # airborne step after the request is an extra hop.
-        real = takeoff & (robot.data.root_link_lin_vel_w[:, 2] >= TAKEOFF_MIN_VZ)
+        real = takeoff & (robot.data.root_link_lin_vel_w[:, 2] >= self.takeoff_min_vz)
         touchdown = ~flight_now & self.flight
         eligible = (self.t >= self.t_jump) & (self.t < self.t_jump + WINDOW_S + GRACE_S) & (self.flights == 0)
         starts_first = real & eligible
@@ -342,6 +355,16 @@ def reward_param(env, env_ids, reward_name: str, param: str, stages: list[dict])
     return torch.tensor([term_cfg.params[param]])
 
 
+def takeoff_min_vz(env, env_ids, stages: list[dict]) -> torch.Tensor:
+    """Curriculum: the jump command's take-off speed from ``stages`` ({"step", "value"})."""
+    del env_ids
+    cmd = _jump(env)
+    for stage in stages:
+        if env.common_step_counter > stage["step"]:
+            cmd.takeoff_min_vz = stage["value"]
+    return torch.tensor([cmd.takeoff_min_vz])
+
+
 def make_dukki_jump_env_cfg(play: bool = False):
     """The stand-up env (all collisions, 61D obs, DR) turned into the jump task."""
     cfg = make_microduck_standup_env_cfg(play=play)
@@ -407,6 +430,11 @@ def make_dukki_jump_env_cfg(play: bool = False):
                 "stages": [{"step": it * STEPS_PER_ITERATION, "value": v} for it, v in stages],
             },
         )
+
+    cfg.curriculum["takeoff_min_vz"] = CurriculumTermCfg(
+        func=takeoff_min_vz,
+        params={"stages": [{"step": it * STEPS_PER_ITERATION, "value": v} for it, v in TAKEOFF_VZ_STAGES]},
+    )
 
     cfg.terminations["fell_over"] = TerminationTermCfg(
         func=mdp.bad_orientation, params={"limit_angle": math.radians(FALL_TILT_DEG)}

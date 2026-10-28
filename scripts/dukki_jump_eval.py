@@ -12,7 +12,8 @@ Per robot, from the jump task's own state (JumpCommand) and the robot:
     at limit      time with any joint's motor torque within 5% of the 1.0 N.m clamp
     head yaw      peak head-yaw motor torque
 
-Pushes are off as in training. ``--scripted`` runs the open-loop jump of
+Pushes are off as in training. A take-off is judged at the final TAKEOFF_MIN_VZ (training ramps
+up to it; ``--takeoff-vz`` to change). ``--scripted`` runs the open-loop jump of
 scripts/dukki_jump_probe.py instead of a policy (crouch 0.8 rad of knee over 0.4 s, hold 0.2 s,
 push 1.0 for 0.08 s, from the request), a baseline that also checks this script; run it stiff
 (DUKKI_KP=4) as the probe explains.
@@ -33,6 +34,7 @@ import torch
 
 import mjlab_microduck.tasks  # noqa: F401  (registers tasks)
 from mjlab_microduck.tasks.dukki import check_cfg_matches_run
+from mjlab_microduck.tasks.dukki_jump import TAKEOFF_MIN_VZ
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
@@ -66,6 +68,7 @@ def main():
     ap.add_argument("--envs", type=int, default=512)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--takeoff-vz", type=float, default=TAKEOFF_MIN_VZ)
     args = ap.parse_args()
     if not args.scripted and not args.checkpoint:
         ap.error("--checkpoint or --scripted")
@@ -91,6 +94,7 @@ def main():
     robot = env.scene["robot"]
     act = robot.actuators[0]
     cmd = env.command_manager.get_term("twist")
+    cmd.takeoff_min_vz = args.takeoff_vz
     names = list(act.target_names)
     head_yaw = names.index("head_yaw")
     n, dt = args.envs, env.step_dt

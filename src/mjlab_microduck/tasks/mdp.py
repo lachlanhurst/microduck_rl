@@ -145,6 +145,35 @@ try:
 except Exception as _e:  # pragma: no cover
     print(f"[mdp] Patch 5 NOT applied ({_e!r})")
 
+# Patch 6: action noise reset. A resumed policy keeps its learnt action std; one settled into a
+# safe habit (Dukki jump run 3g: std 0.14, never leaving the ground under a stricter take-off
+# rule) explores too little to find what the new rewards pay for. With
+# MICRODUCK_RESET_ACTION_STD=<std> the actor's std is set to that value after loading.
+RESET_ACTION_STD_ENV = "MICRODUCK_RESET_ACTION_STD"
+
+try:
+    _load_before_std_reset = _MjlabRunner.load
+
+    def _load_with_std_reset(self, path, *args, **kwargs):
+        infos = _load_before_std_reset(self, path, *args, **kwargs)
+        value = os.environ.get(RESET_ACTION_STD_ENV, "")
+        if value:
+            dist = self.alg.actor.distribution
+            with torch.no_grad():
+                if dist.std_type == "log":
+                    old = dist.log_std_param.exp().mean().item()
+                    dist.log_std_param.fill_(math.log(float(value)))
+                else:
+                    old = dist.std_param.mean().item()
+                    dist.std_param.fill_(float(value))
+            print(f"[mdp] Patch 6: action std {old:.3f} → {float(value):.3f} after loading {path}")
+        return infos
+
+    _MjlabRunner.load = _load_with_std_reset
+    print("[mdp] Patch 6 active: MICRODUCK_RESET_ACTION_STD=<std> resets the action std after checkpoint load")
+except Exception as _e:  # pragma: no cover
+    print(f"[mdp] Patch 6 NOT applied ({_e!r})")
+
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
