@@ -70,7 +70,7 @@ from dataclasses import dataclass
 
 import torch
 from mjlab.envs import mdp
-from mjlab.managers import RewardTermCfg, TerminationTermCfg
+from mjlab.managers import CurriculumTermCfg, RewardTermCfg, TerminationTermCfg
 
 from mjlab_microduck.tasks import mdp as microduck_mdp
 from mjlab_microduck.tasks.microduck_standup_env_cfg import STAND_Z, make_microduck_standup_env_cfg
@@ -84,6 +84,17 @@ FLIGHT_MIN_Z = STAND_Z - 0.02
 TAKEOFF_MAX_TILT_DEG = 25.0
 FLIGHT_HEIGHT_UNIT = 0.02  # m of trunk height above standing per extra unit of flight reward
 FALL_TILT_DEG = 60.0
+# Weights by training iteration for the two prices that can make an early, noisy policy prefer to
+# fall: (iteration, weight). Run 3 with them strict from the start fell on purpose three times over
+# (episodes 0.4 to 0.9 s, the action noise never falling): a flailing robot reaching the request
+# pays -100 a second for every extra airborne step, and one landing a radian off its heading pays
+# -5 a second until the episode ends, both soon past the -10 of a fall before the request. Run 2,
+# with neither, stood by iteration 300. So they start at run 2's level and go strict by 2000.
+STRICT_STAGES = {
+    "jump_extra": ((0, -20.0), (1500, -50.0), (2000, -100.0)),
+    "jump_heading": ((0, -0.5), (1500, -2.0), (2000, -5.0)),
+}
+STEPS_PER_ITERATION = 24  # the runner's num_steps_per_env; curricula count env steps
 SQUAT_FULL_M = 0.025  # trunk and head squat for the full bonus: about the probe's best crouch
 HEAD_BODY = "jaw_soft"  # top of the neck chain, 225 mm when standing
 
@@ -310,9 +321,9 @@ def make_dukki_jump_env_cfg(play: bool = False):
     cfg.rewards["jump_push"] = RewardTermCfg(func=jump_push, weight=10.0)
     cfg.rewards["jump_flight"] = RewardTermCfg(func=jump_flight, weight=50.0)
     cfg.rewards["jump_squat"] = RewardTermCfg(func=jump_squat, weight=10.0 / 0.02)  # once, undoing dt
-    cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=-5.0)
+    cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=STRICT_STAGES["jump_heading"][0][1])
     cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=-0.05)
-    cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=-100.0)
+    cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=STRICT_STAGES["jump_extra"][0][1])
     # Run 2's price. Besides discouraging hopping unasked, it is what tells a noisy early policy to
     # act less randomly: its flailing hops are charged, and calmer actions are the cheapest fix, so
     # the action noise falls and the teacher's stance holds. Too strong and falling fast is cheaper
@@ -322,6 +333,16 @@ def make_dukki_jump_env_cfg(play: bool = False):
     cfg.rewards["jump_hop_early"] = RewardTermCfg(func=jump_hop_early, weight=-20.0)
     cfg.rewards["jump_missed"] = RewardTermCfg(func=jump_missed, weight=-2.0)
     cfg.rewards["fall"] = RewardTermCfg(func=mdp.is_terminated, weight=-10.0 / 0.02)  # once, undoing dt
+
+    # The strict prices ramp in once it stands and jumps (STRICT_STAGES).
+    for name, stages in STRICT_STAGES.items():
+        cfg.curriculum[f"{name}_weight"] = CurriculumTermCfg(
+            func=microduck_mdp.reward_weight,
+            params={
+                "reward_name": name,
+                "weight_stages": [{"step": it * STEPS_PER_ITERATION, "weight": w} for it, w in stages],
+            },
+        )
 
     cfg.terminations["fell_over"] = TerminationTermCfg(
         func=mdp.bad_orientation, params={"limit_angle": math.radians(FALL_TILT_DEG)}
