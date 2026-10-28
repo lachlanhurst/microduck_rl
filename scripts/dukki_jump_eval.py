@@ -4,6 +4,7 @@
 Per robot, from the jump task's own state (JumpCommand) and the robot:
 
     jumped once   one flight, started in the request window from an upright take-off, and landed
+    settled       of those, still upright on the ground 0.5 s after landing (when the jump is paid)
     squat         trunk and head drop below their heights at the request, before take-off
     rise          trunk peak in the first flight above its height at the request
     upright end   standing (trunk above 105 mm, tilt under 20 deg) at the end
@@ -137,7 +138,7 @@ def main():
 
     label = "scripted jump" if args.scripted else args.checkpoint
     print(f"== {label} on {args.task}, {n} robots, one {cfg.episode_length_s:.0f} s episode each")
-    print(f"  jumped once {pct(once):5.1f}%   more than once {pct(extra):5.1f}%   no jump {pct(alive & (cmd.flights == 0)):5.1f}%   fell {pct(fell):5.1f}%   upright at the end {pct(upright):5.1f}%")
+    print(f"  jumped once {pct(once):5.1f}%   of which settled {pct(once & cmd.settled):5.1f}%   more than once {pct(extra):5.1f}%   no jump {pct(alive & (cmd.flights == 0)):5.1f}%   fell {pct(fell):5.1f}%   upright at the end {pct(upright):5.1f}%")
     for title, x, mask, unit, scale in (
         ("rise (jumped once)", rise, once, "mm", 1000),
         ("squat, trunk", squat_trunk, once, "mm", 1000),

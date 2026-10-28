@@ -56,14 +56,22 @@ Run 3g never took off in 350 iterations: 0.3 m/s from the start was out of reach
 quiet. Run 3h: the take-off speed ramps from 0.1 to 0.3 (TAKEOFF_VZ_STAGES), and the resume from
 run 3f's 2250 resets the action std to 0.5 (MICRODUCK_RESET_ACTION_STD, mdp.py patch 6).
 
+Run 3h jumped: full 25 mm squat, high flights, by iteration 2500, but nearly every jump ended in
+a fall (fall -1.9 at 2700). The flight was paid in the air, so a big jump and a fall (about +16
+flight, +10 squat, -10 fall) beat a smaller one landed (about 5 of standing after). Run 3i: the
+flight and squat rewards are held until the robot has stood SETTLE_S after landing, upright
+(tilt under SETTLE_MAX_TILT_DEG, still on the ground, no second hop); a jump that ends in a
+fall pays nothing. Resumed from run 3h's iteration 2750.
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
   jump_push       upward trunk speed in the window before take-off, upright only: the gradient
                   that finds the push
-  jump_flight     per step of the first flight, if launch_ok: 1 plus the trunk height above
-                  standing in units of FLIGHT_HEIGHT_UNIT
-  jump_squat      once, at the landing of a first flight from an upright take-off: the trunk's
+  jump_flight     once, when the landing settles (SETTLE_S upright after it): the sum over the
+                  first flight's steps of the trunk height above standing in units of
+                  FLIGHT_HEIGHT_UNIT, if launch_ok
+  jump_squat      once, when the landing of a first flight from an upright take-off settles: the trunk's
                   drop before take-off below its height when the jump was asked for, full at
                   SQUAT_FULL_M. A squat with no jump earns nothing, so it cannot become a place
                   to rest (run 1's collapse). The flight is also scaled by it (jump_flight)
@@ -130,6 +138,8 @@ STRICT_PARAM_STAGES = {
     ("jump_flight", "squat_floor"): ((0, 1.0), (750, 0.6), (1500, 0.3)),
 }
 STEPS_PER_ITERATION = 24  # the runner's num_steps_per_env; curricula count env steps
+SETTLE_S = 0.5  # s upright on the ground after landing before the jump is paid
+SETTLE_MAX_TILT_DEG = 20.0
 SQUAT_FULL_M = 0.025  # trunk and head squat for the full bonus: about the probe's best crouch
 HEAD_BODY = "jaw_soft"  # top of the neck chain, 225 mm when standing
 
@@ -165,6 +175,15 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         self.landed_now = torch.zeros(n, dtype=torch.bool, device=dev)
         # The trunk's worst tilt from the request until take-off.
         self.approach_tilt = torch.zeros(n, device=dev)
+        # The first flight's height gain, summed over its steps, held until the landing settles.
+        self.flight_gain = torch.zeros(n, device=dev)
+        self.t_land = torch.zeros(n, device=dev)
+        # Landed from an upright take-off; whether the settle check has been made; True on the
+        # step it passed; passed.
+        self.landed_ok = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.settle_checked = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.settled_now = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.settled = torch.zeros(n, dtype=torch.bool, device=dev)
         self._head_id = None
         # Set by the takeoff_min_vz curriculum (TAKEOFF_VZ_STAGES).
         self.takeoff_min_vz = TAKEOFF_VZ_STAGES[0][1]
@@ -181,9 +200,13 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         lo, hi = WAIT_S
         self.t[env_ids] = 0.0
         self.t_jump[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(lo, hi)
-        for flag in (self.flight, self.first, self.launch_ok, self.landed, self.requested, self.landed_now):
+        for flag in (
+            self.flight, self.first, self.launch_ok, self.landed, self.requested, self.landed_now,
+            self.landed_ok, self.settle_checked, self.settled_now, self.settled,
+        ):
             flag[env_ids] = False
         self.approach_tilt[env_ids] = 0.0
+        self.flight_gain[env_ids] = 0.0
         self.flights[env_ids] = 0
         self.vel_command_b[env_ids] = 0.0
 
@@ -235,12 +258,21 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         starts_first = real & eligible
         self.first |= starts_first
         self.launch_ok |= starts_first & (torch.maximum(self.approach_tilt, tilt) < TAKEOFF_MAX_TILT_DEG)
+        gain = ((z - STAND_Z) / FLIGHT_HEIGHT_UNIT).clamp(0.0, 3.0)
+        self.flight_gain += gain * (self.first & flight_now & self.launch_ok).float()
         ended_first = touchdown & self.first
         self.landed_now = ended_first & self.launch_ok
         self.landed |= ended_first
+        self.landed_ok |= self.landed_now
+        self.t_land = torch.where(self.landed_now, self.t, self.t_land)
         self.first &= ~ended_first
         self.flights += real.long()
         self.flight = flight_now
+        # One check, SETTLE_S after landing: upright, on the ground, and no hop since.
+        due = self.landed_ok & ~self.settle_checked & (self.t - self.t_land >= SETTLE_S)
+        self.settled_now = due & ~flight_now & (self.flights == 1) & (tilt < SETTLE_MAX_TILT_DEG)
+        self.settled |= self.settled_now
+        self.settle_checked |= due
         self.vel_command_b[:] = 0.0
         self.vel_command_b[:, 0] = self.in_window.float()
 
@@ -287,15 +319,15 @@ def jump_push(env, max_speed: float = 1.0) -> torch.Tensor:
 
 
 def jump_flight(env, squat_floor: float = 1.0) -> torch.Tensor:
-    """Per step of the first flight, from an upright take-off: the trunk's height above standing in
-    FLIGHT_HEIGHT_UNITs (no base for merely having both feet up, which run 3f collected below
-    standing height), times ``squat_floor + (1 - squat_floor) * squat share``. At a floor of 1 the
-    squat does not matter; the STRICT_PARAM_STAGES curriculum lowers it."""
+    """Once, when the landing settles: the first flight's trunk height above standing in
+    FLIGHT_HEIGHT_UNITs, summed over its steps (no base for merely having both feet up, which run
+    3f collected below standing height), times ``squat_floor + (1 - squat_floor) * squat share``.
+    The same total as paying each step in the air, but nothing for a jump that ends in a fall
+    (run 3h). At a floor of 1 the squat does not matter; the STRICT_PARAM_STAGES curriculum
+    lowers it."""
     cmd = _jump(env)
-    z = env.scene["robot"].data.root_link_pos_w[:, 2]
-    gain = ((z - STAND_Z) / FLIGHT_HEIGHT_UNIT).clamp(0.0, 3.0)
     squat = squat_floor + (1.0 - squat_floor) * cmd.squat_share
-    return gain * squat * (cmd.first & cmd.flight & cmd.launch_ok).float()
+    return cmd.flight_gain * squat * cmd.settled_now.float()
 
 
 def jump_extra(env) -> torch.Tensor:
@@ -311,10 +343,10 @@ def jump_hop_early(env) -> torch.Tensor:
 
 
 def jump_squat(env) -> torch.Tensor:
-    """Once, at the landing of a first flight from an upright take-off: the squat before it, as a
-    share of SQUAT_FULL_M (capped at 1)."""
+    """Once, when the landing of a first flight from an upright take-off settles: the squat before
+    it, as a share of SQUAT_FULL_M (capped at 1)."""
     cmd = _jump(env)
-    return (cmd.squat_depth / SQUAT_FULL_M).clamp(0.0, 1.0) * cmd.landed_now.float()
+    return (cmd.squat_depth / SQUAT_FULL_M).clamp(0.0, 1.0) * cmd.settled_now.float()
 
 
 def jump_heading(env) -> torch.Tensor:
