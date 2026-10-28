@@ -39,6 +39,12 @@ now only for a hop after the request, and flights count from the request so an e
 cannot void the jump): the heading is held after landing, the head may not yaw or roll during the jump, a second
 hop costs about what the first earns, and a squat of trunk and head before a real jump pays.
 
+Run 3d (the strict prices ramped in, 28/10/2026) jumped 40 mm, once in 60%, upright at the end in
+94%, but still off straight legs (trunk at standing height until take-off): with head yaw and roll
+priced it flung the head straight up instead, and nodded it 8 mm first to collect half the squat
+bonus. Run 3e: the squat is the trunk's alone, the flight reward comes to depend on it (floor 1.0,
+0.6 from iteration 750, 0.3 from 1500), and every neck and head joint's speed is priced.
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
@@ -46,13 +52,13 @@ Rewards (scaled by dt like every mjlab term):
                   that finds the push
   jump_flight     per step of the first flight, if launch_ok: 1 plus the trunk height above
                   standing in units of FLIGHT_HEIGHT_UNIT
-  jump_squat      once, at the landing of a first flight from an upright take-off: the squat
-                  before take-off, the mean drop of the trunk and the head below their heights
-                  when the jump was asked for, full at SQUAT_FULL_M. A squat with no jump earns
-                  nothing, so it cannot become a place to rest (run 1's collapse)
+  jump_squat      once, at the landing of a first flight from an upright take-off: the trunk's
+                  drop before take-off below its height when the jump was asked for, full at
+                  SQUAT_FULL_M. A squat with no jump earns nothing, so it cannot become a place
+                  to rest (run 1's collapse). The flight is also scaled by it (jump_flight)
   jump_heading    once landed, every step: the heading's error from when the jump was asked for
-  jump_head_twist head yaw and roll speed, squared, from the request until landing (neck and head
-                  pitch stay free: the head going down is part of the squat)
+  jump_head_twist neck and head joint speed, squared, from the request until landing: a fling
+                  costs far more than lowering the head slowly into the squat
   jump_extra      airborne after the request that is not the first flight: a second hop after
                   landing, or a flight after the window
   jump_hop_early  airborne before the request: a stumble off the ground while it should stand, at
@@ -93,6 +99,11 @@ FALL_TILT_DEG = 60.0
 STRICT_STAGES = {
     "jump_extra": ((0, -20.0), (1500, -50.0), (2000, -100.0)),
     "jump_heading": ((0, -0.5), (1500, -2.0), (2000, -5.0)),
+}
+# Reward parameters by training iteration, (iteration, value): the flight's squat floor comes down
+# once it jumps, so it learns to jump first and is then pushed to squat for it.
+STRICT_PARAM_STAGES = {
+    ("jump_flight", "squat_floor"): ((0, 1.0), (750, 0.6), (1500, 0.3)),
 }
 STEPS_PER_ITERATION = 24  # the runner's num_steps_per_env; curricula count env steps
 SQUAT_FULL_M = 0.025  # trunk and head squat for the full bonus: about the probe's best crouch
@@ -152,8 +163,14 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
 
     @property
     def squat_depth(self) -> torch.Tensor:
-        """Mean drop of the trunk and the head below their heights at the request, m."""
-        return 0.5 * ((self.trunk_ref - self.trunk_low) + (self.head_ref - self.head_low)).clamp_min(0.0)
+        """The trunk's drop below its height at the request, before take-off, m. Trunk only: run 3d
+        collected the old trunk-and-head mean by nodding the head 8 mm with the trunk not moving."""
+        return (self.trunk_ref - self.trunk_low).clamp_min(0.0)
+
+    @property
+    def squat_share(self) -> torch.Tensor:
+        """The squat as a share of SQUAT_FULL_M, 0 to 1."""
+        return (self.squat_depth / SQUAT_FULL_M).clamp(0.0, 1.0)
 
     def _update_command(self) -> None:
         env = self._env_ref
@@ -238,12 +255,15 @@ def jump_push(env, max_speed: float = 1.0) -> torch.Tensor:
     return vz * (cmd.in_window & (cmd.flights == 0) & upright).float()
 
 
-def jump_flight(env) -> torch.Tensor:
-    """Per step of the first flight, from an upright take-off: 1 plus the height gained."""
+def jump_flight(env, squat_floor: float = 1.0) -> torch.Tensor:
+    """Per step of the first flight, from an upright take-off: 1 plus the height gained, times
+    ``squat_floor + (1 - squat_floor) * squat share``. At a floor of 1 the squat does not matter; the
+    STRICT_PARAM_STAGES curriculum lowers it, so a jump off straight legs comes to pay less."""
     cmd = _jump(env)
     z = env.scene["robot"].data.root_link_pos_w[:, 2]
     gain = ((z - STAND_Z) / FLIGHT_HEIGHT_UNIT).clamp(0.0, 3.0)
-    return (1.0 + gain) * (cmd.first & cmd.flight & cmd.launch_ok).float()
+    squat = squat_floor + (1.0 - squat_floor) * cmd.squat_share
+    return (1.0 + gain) * squat * (cmd.first & cmd.flight & cmd.launch_ok).float()
 
 
 def jump_extra(env) -> torch.Tensor:
@@ -274,12 +294,14 @@ def jump_heading(env) -> torch.Tensor:
 
 
 def jump_head_twist(env) -> torch.Tensor:
-    """Head yaw and roll speed squared, from the request until landing."""
+    """Neck and head joint speed squared, from the request until landing. Squared, so a fling costs
+    far more than lowering the head slowly into a squat. Run 3d, with yaw and roll alone priced,
+    flung the head straight up (pitch) to jump off straight legs."""
     cmd = _jump(env)
     robot = env.scene["robot"]
     act = robot.actuators[0]
     names = list(act.target_names)
-    ids = [act._target_ids_list[names.index(n)] for n in ("head_yaw", "head_roll")]
+    ids = [act._target_ids_list[names.index(n)] for n in ("neck_pitch", "head_pitch", "head_yaw", "head_roll")]
     speed2 = robot.data.joint_vel[:, ids].pow(2).sum(dim=1)
     return speed2 * (cmd.requested & ~cmd.landed).float()
 
@@ -288,6 +310,17 @@ def jump_missed(env) -> torch.Tensor:
     """After the window, if it never flew."""
     cmd = _jump(env)
     return (cmd.after_window & (cmd.flights == 0) & ~cmd.flight).float()
+
+
+def reward_param(env, env_ids, reward_name: str, param: str, stages: list[dict]) -> torch.Tensor:
+    """Curriculum: sets a reward term's parameter from ``stages`` ({"step", "value"}), the latest
+    stage whose step has passed, like microduck_mdp.reward_weight does for weights."""
+    del env_ids
+    term_cfg = env.reward_manager.get_term_cfg(reward_name)
+    for stage in stages:
+        if env.common_step_counter > stage["step"]:
+            term_cfg.params[param] = stage["value"]
+    return torch.tensor([term_cfg.params[param]])
 
 
 def make_dukki_jump_env_cfg(play: bool = False):
@@ -319,10 +352,12 @@ def make_dukki_jump_env_cfg(play: bool = False):
         del cfg.rewards[name]
     cfg.rewards["jump_stand"] = RewardTermCfg(func=jump_stand, weight=2.0)
     cfg.rewards["jump_push"] = RewardTermCfg(func=jump_push, weight=10.0)
-    cfg.rewards["jump_flight"] = RewardTermCfg(func=jump_flight, weight=50.0)
+    cfg.rewards["jump_flight"] = RewardTermCfg(
+        func=jump_flight, weight=50.0, params={"squat_floor": STRICT_PARAM_STAGES[("jump_flight", "squat_floor")][0][1]}
+    )
     cfg.rewards["jump_squat"] = RewardTermCfg(func=jump_squat, weight=10.0 / 0.02)  # once, undoing dt
     cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=STRICT_STAGES["jump_heading"][0][1])
-    cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=-0.05)
+    cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=-0.1)
     cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=STRICT_STAGES["jump_extra"][0][1])
     # Run 2's price. Besides discouraging hopping unasked, it is what tells a noisy early policy to
     # act less randomly: its flailing hops are charged, and calmer actions are the cheapest fix, so
@@ -341,6 +376,16 @@ def make_dukki_jump_env_cfg(play: bool = False):
             params={
                 "reward_name": name,
                 "weight_stages": [{"step": it * STEPS_PER_ITERATION, "weight": w} for it, w in stages],
+            },
+        )
+
+    for (name, param), stages in STRICT_PARAM_STAGES.items():
+        cfg.curriculum[f"{name}_{param}"] = CurriculumTermCfg(
+            func=reward_param,
+            params={
+                "reward_name": name,
+                "param": param,
+                "stages": [{"step": it * STEPS_PER_ITERATION, "value": v} for it, v in stages],
             },
         )
 
