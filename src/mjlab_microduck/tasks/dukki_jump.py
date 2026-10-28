@@ -45,6 +45,13 @@ priced it flung the head straight up instead, and nodded it 8 mm first to collec
 bonus. Run 3e: the squat is the trunk's alone, the flight reward comes to depend on it (floor 1.0,
 0.6 from iteration 750, 0.3 from 1500), and every neck and head joint's speed is priced.
 
+Run 3f (strict prices and the head price ramped in) never fell, kept its heading (median 6-12
+deg) and squatted 18 mm, but did not jump: it dropped 25 mm so fast its feet unloaded, which
+counted as the flight, then straightened slowly, the trunk never back above standing. Run 3g:
+a take-off is real only with the trunk rising at TAKEOFF_MIN_VZ; only a real one can be the jump
+or count as a flight, other airborne steps after the request are extra hops; and the flight pays
+only for height above standing. Resumed from run 3f's iteration 2250.
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
@@ -88,6 +95,7 @@ GRACE_S = 0.3  # a take-off this soon after the window still counts as the jump
 FLIGHT_MAX_TILT_DEG = 30.0
 FLIGHT_MIN_Z = STAND_Z - 0.02
 TAKEOFF_MAX_TILT_DEG = 25.0
+TAKEOFF_MIN_VZ = 0.3  # m/s, trunk vertical speed for a real take-off
 FLIGHT_HEIGHT_UNIT = 0.02  # m of trunk height above standing per extra unit of flight reward
 FALL_TILT_DEG = 60.0
 # Weights by training iteration for the two prices that can make an early, noisy policy prefer to
@@ -204,16 +212,21 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         z = robot.data.root_link_pos_w[:, 2]
         flight_now = ~feet_down & (z > FLIGHT_MIN_Z) & (tilt < FLIGHT_MAX_TILT_DEG)
         takeoff = flight_now & ~self.flight
+        # A real take-off has the trunk rising: run 3f dropped 25 mm so fast its feet unloaded, and
+        # that counted as a flight (and its drop as the squat) with the trunk never back above
+        # standing. Only real take-offs can be the jump or count towards ``flights``; any other
+        # airborne step after the request is an extra hop.
+        real = takeoff & (robot.data.root_link_lin_vel_w[:, 2] >= TAKEOFF_MIN_VZ)
         touchdown = ~flight_now & self.flight
         eligible = (self.t >= self.t_jump) & (self.t < self.t_jump + WINDOW_S + GRACE_S) & (self.flights == 0)
-        starts_first = takeoff & eligible
+        starts_first = real & eligible
         self.first |= starts_first
         self.launch_ok |= starts_first & (torch.maximum(self.approach_tilt, tilt) < TAKEOFF_MAX_TILT_DEG)
         ended_first = touchdown & self.first
         self.landed_now = ended_first & self.launch_ok
         self.landed |= ended_first
         self.first &= ~ended_first
-        self.flights += takeoff.long()
+        self.flights += real.long()
         self.flight = flight_now
         self.vel_command_b[:] = 0.0
         self.vel_command_b[:, 0] = self.in_window.float()
@@ -261,14 +274,15 @@ def jump_push(env, max_speed: float = 1.0) -> torch.Tensor:
 
 
 def jump_flight(env, squat_floor: float = 1.0) -> torch.Tensor:
-    """Per step of the first flight, from an upright take-off: 1 plus the height gained, times
-    ``squat_floor + (1 - squat_floor) * squat share``. At a floor of 1 the squat does not matter; the
-    STRICT_PARAM_STAGES curriculum lowers it, so a jump off straight legs comes to pay less."""
+    """Per step of the first flight, from an upright take-off: the trunk's height above standing in
+    FLIGHT_HEIGHT_UNITs (no base for merely having both feet up, which run 3f collected below
+    standing height), times ``squat_floor + (1 - squat_floor) * squat share``. At a floor of 1 the
+    squat does not matter; the STRICT_PARAM_STAGES curriculum lowers it."""
     cmd = _jump(env)
     z = env.scene["robot"].data.root_link_pos_w[:, 2]
     gain = ((z - STAND_Z) / FLIGHT_HEIGHT_UNIT).clamp(0.0, 3.0)
     squat = squat_floor + (1.0 - squat_floor) * cmd.squat_share
-    return (1.0 + gain) * squat * (cmd.first & cmd.flight & cmd.launch_ok).float()
+    return gain * squat * (cmd.first & cmd.flight & cmd.launch_ok).float()
 
 
 def jump_extra(env) -> torch.Tensor:
