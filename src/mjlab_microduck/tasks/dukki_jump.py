@@ -63,6 +63,12 @@ flight and squat rewards are held until the robot has stood SETTLE_S after landi
 (tilt under SETTLE_MAX_TILT_DEG, still on the ground, no second hop); a jump that ends in a
 fall pays nothing. Resumed from run 3h's iteration 2750.
 
+Run 3i stopped jumping within 30 iterations: with three in four jumps still falling, a jump cost
+about -10 and not jumping only the missed price, about -5. Run 3j: the squat bonus is paid at
+touchdown again, as in run 3h; only the flight waits for the landing to settle. A jump that
+falls now nets about 0 (+10 squat, -10 fall), better than none; one that lands earns the flight
+on top. Resumed from run 3h's iteration 2750.
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
@@ -71,7 +77,7 @@ Rewards (scaled by dt like every mjlab term):
   jump_flight     once, when the landing settles (SETTLE_S upright after it): the sum over the
                   first flight's steps of the trunk height above standing in units of
                   FLIGHT_HEIGHT_UNIT, if launch_ok
-  jump_squat      once, when the landing of a first flight from an upright take-off settles: the trunk's
+  jump_squat      once, at the landing of a first flight from an upright take-off: the trunk's
                   drop before take-off below its height when the jump was asked for, full at
                   SQUAT_FULL_M. A squat with no jump earns nothing, so it cannot become a place
                   to rest (run 1's collapse). The flight is also scaled by it (jump_flight)
@@ -343,10 +349,11 @@ def jump_hop_early(env) -> torch.Tensor:
 
 
 def jump_squat(env) -> torch.Tensor:
-    """Once, when the landing of a first flight from an upright take-off settles: the squat before
-    it, as a share of SQUAT_FULL_M (capped at 1)."""
+    """Once, at the landing of a first flight from an upright take-off: the squat before it, as a
+    share of SQUAT_FULL_M (capped at 1). Paid at touchdown, not when the landing settles: run 3i,
+    with this held too, found a jump that fell cost more than none and stopped jumping."""
     cmd = _jump(env)
-    return (cmd.squat_depth / SQUAT_FULL_M).clamp(0.0, 1.0) * cmd.settled_now.float()
+    return (cmd.squat_depth / SQUAT_FULL_M).clamp(0.0, 1.0) * cmd.landed_now.float()
 
 
 def jump_heading(env) -> torch.Tensor:
