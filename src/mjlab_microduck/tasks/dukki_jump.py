@@ -32,7 +32,11 @@ Run 2 (taught, 27/10/2026) jumped: trunk 36 to 44 mm above standing, one jump, b
 But it did not squat at all (lowest point before take-off within 1 mm of standing): it jumped off
 nearly straight legs by throwing the heavy head, head pitch and yaw at the torque clamp, and the
 sideways part twisted the body, 47 to 77 deg of heading per jump on two robots in three. So for
-run 3: the heading is held after landing, the head may not yaw or roll during the jump, a second
+run 3 (its first try charged EVERY airborne step outside the first flight at -100, including a
+noisy policy's stumbles before the request: about -2 a step against -10 for a fall, so it learnt
+to fall within 0.4 s of every episode with its action noise rising to 1.5; the heavy price is
+now only for a hop after the request, and flights count from the request so an early stumble
+cannot void the jump): the heading is held after landing, the head may not yaw or roll during the jump, a second
 hop costs about what the first earns, and a squat of trunk and head before a real jump pays.
 
 Rewards (scaled by dt like every mjlab term):
@@ -49,7 +53,9 @@ Rewards (scaled by dt like every mjlab term):
   jump_heading    once landed, every step: the heading's error from when the jump was asked for
   jump_head_twist head yaw and roll speed, squared, from the request until landing (neck and head
                   pitch stay free: the head going down is part of the squat)
-  jump_extra      any airborne step that is not the first flight
+  jump_extra      airborne after the request that is not the first flight: a second hop after
+                  landing, or a flight after the window
+  jump_hop_early  airborne before the request: a stumble off the ground while it should stand
   jump_missed     after the window, if it never flew
   fall            the fall termination
 Regularisers stay from the stand-up task: action rate, torque rate, angular velocity and
@@ -147,6 +153,8 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         z_head = robot.data.body_link_pos_w[:, self._head_id, 2]
         newly = self.in_window & ~self.requested
         self.requested |= newly
+        # Flights count from the request: a stumble off the ground before it does not void the jump.
+        self.flights = torch.where(newly, torch.zeros_like(self.flights), self.flights)
         self.heading_ref = torch.where(newly, robot.data.heading_w, self.heading_ref)
         self.trunk_ref = torch.where(newly, z_trunk, self.trunk_ref)
         self.head_ref = torch.where(newly, z_head, self.head_ref)
@@ -227,9 +235,15 @@ def jump_flight(env) -> torch.Tensor:
 
 
 def jump_extra(env) -> torch.Tensor:
-    """Airborne steps that are not the first flight: hopping again, or outside the window."""
+    """Airborne after the request that is not the first flight: hopping again, or after the window."""
     cmd = _jump(env)
-    return (cmd.flight & ~cmd.first).float()
+    return (cmd.flight & ~cmd.first & cmd.requested).float()
+
+
+def jump_hop_early(env) -> torch.Tensor:
+    """Airborne before the request: a stumble off the ground while it should be standing."""
+    cmd = _jump(env)
+    return (cmd.flight & ~cmd.requested).float()
 
 
 def jump_squat(env) -> torch.Tensor:
@@ -298,6 +312,7 @@ def make_dukki_jump_env_cfg(play: bool = False):
     cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=-5.0)
     cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=-0.05)
     cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=-100.0)
+    cfg.rewards["jump_hop_early"] = RewardTermCfg(func=jump_hop_early, weight=-20.0)
     cfg.rewards["jump_missed"] = RewardTermCfg(func=jump_missed, weight=-2.0)
     cfg.rewards["fall"] = RewardTermCfg(func=mdp.is_terminated, weight=-10.0 / 0.02)  # once, undoing dt
 
