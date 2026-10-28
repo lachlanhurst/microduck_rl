@@ -74,6 +74,14 @@ touchdown, and a second hop cost only a few steps of jump_extra. Run 3k: with fa
 squat bonus waits for the landing to settle as well (run 3i's rule), so a second hop forfeits
 it. Resumed from run 3j's iteration 3000.
 
+Run 3k stopped jumping within 35 iterations, as run 3i did: holding everything until a clean
+single landing made trying worse than not trying. Run 3j's second hop was deliberate, not a
+bounce (a 60 ms blip out of the squat, then 0.4 s later a 0.46 m/s take-off): the small hop
+collected the squat bonus, the big one was run 3h's jump. Run 3l: run 3j's payment (squat at
+touchdown, flight when it settles) plus jump_retake, a one-off price per real take-off after the
+first, the size of the full squat bonus. A double hop nets about 0, a clean jump about +10 and
+the flight, no jump -5. Resumed from run 3j's iteration 3000.
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
@@ -82,13 +90,14 @@ Rewards (scaled by dt like every mjlab term):
   jump_flight     once, when the landing settles (SETTLE_S upright after it): the sum over the
                   first flight's steps of the trunk height above standing in units of
                   FLIGHT_HEIGHT_UNIT, if launch_ok
-  jump_squat      once, when the landing of a first flight from an upright take-off settles: the trunk's
+  jump_squat      once, at the landing of a first flight from an upright take-off: the trunk's
                   drop before take-off below its height when the jump was asked for, full at
                   SQUAT_FULL_M. A squat with no jump earns nothing, so it cannot become a place
                   to rest (run 1's collapse). The flight is also scaled by it (jump_flight)
   jump_heading    once landed, every step: the heading's error from when the jump was asked for
   jump_head_twist neck and head joint speed, squared, from the request until landing: a fling
                   costs far more than lowering the head slowly into the squat
+  jump_retake     once per real take-off after the first, the size of the full squat bonus
   jump_extra      airborne after the request that is not the first flight: a second hop after
                   landing, or a flight after the window
   jump_hop_early  airborne before the request: a stumble off the ground while it should stand, at
@@ -194,6 +203,8 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         self.landed_ok = torch.zeros(n, dtype=torch.bool, device=dev)
         self.settle_checked = torch.zeros(n, dtype=torch.bool, device=dev)
         self.settled_now = torch.zeros(n, dtype=torch.bool, device=dev)
+        # True on the step of a real take-off after the first since the request.
+        self.retake_now = torch.zeros(n, dtype=torch.bool, device=dev)
         self.settled = torch.zeros(n, dtype=torch.bool, device=dev)
         self._head_id = None
         # Set by the takeoff_min_vz curriculum (TAKEOFF_VZ_STAGES).
@@ -213,7 +224,7 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         self.t_jump[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(lo, hi)
         for flag in (
             self.flight, self.first, self.launch_ok, self.landed, self.requested, self.landed_now,
-            self.landed_ok, self.settle_checked, self.settled_now, self.settled,
+            self.landed_ok, self.settle_checked, self.settled_now, self.settled, self.retake_now,
         ):
             flag[env_ids] = False
         self.approach_tilt[env_ids] = 0.0
@@ -277,6 +288,7 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         self.landed_ok |= self.landed_now
         self.t_land = torch.where(self.landed_now, self.t, self.t_land)
         self.first &= ~ended_first
+        self.retake_now = real & self.requested & (self.flights >= 1)
         self.flights += real.long()
         self.flight = flight_now
         # One check, SETTLE_S after landing: upright, on the ground, and no hop since.
@@ -347,6 +359,12 @@ def jump_extra(env) -> torch.Tensor:
     return (cmd.flight & ~cmd.first & cmd.requested).float()
 
 
+def jump_retake(env) -> torch.Tensor:
+    """Once per real take-off after the first since the request (run 3j hopped twice, the first a
+    blip to collect the squat bonus)."""
+    return _jump(env).retake_now.float()
+
+
 def jump_hop_early(env) -> torch.Tensor:
     """Airborne before the request: a stumble off the ground while it should be standing."""
     cmd = _jump(env)
@@ -354,12 +372,11 @@ def jump_hop_early(env) -> torch.Tensor:
 
 
 def jump_squat(env) -> torch.Tensor:
-    """Once, when the landing of a first flight from an upright take-off settles: the squat before
-    it, as a share of SQUAT_FULL_M (capped at 1). Held only once it rarely falls: run 3i, holding
-    it while three in four jumps fell, stopped jumping; run 3j, paying it at touchdown, hopped
-    twice."""
+    """Once, at the landing of a first flight from an upright take-off: the squat before it, as a
+    share of SQUAT_FULL_M (capped at 1). Paid at touchdown: held until the landing settled, runs
+    3i and 3k stopped jumping. A second hop is priced by jump_retake instead."""
     cmd = _jump(env)
-    return (cmd.squat_depth / SQUAT_FULL_M).clamp(0.0, 1.0) * cmd.settled_now.float()
+    return (cmd.squat_depth / SQUAT_FULL_M).clamp(0.0, 1.0) * cmd.landed_now.float()
 
 
 def jump_heading(env) -> torch.Tensor:
@@ -446,6 +463,7 @@ def make_dukki_jump_env_cfg(play: bool = False):
     cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=STRICT_STAGES["jump_heading"][0][1])
     cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=STRICT_STAGES["jump_head_twist"][0][1])
     cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=STRICT_STAGES["jump_extra"][0][1])
+    cfg.rewards["jump_retake"] = RewardTermCfg(func=jump_retake, weight=-10.0 / 0.02)  # once, undoing dt
     # Run 2's price. Besides discouraging hopping unasked, it is what tells a noisy early policy to
     # act less randomly: its flailing hops are charged, and calmer actions are the cheapest fix, so
     # the action noise falls and the teacher's stance holds. Too strong and falling fast is cheaper
