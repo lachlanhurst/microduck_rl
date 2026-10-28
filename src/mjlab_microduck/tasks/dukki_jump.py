@@ -96,9 +96,14 @@ FALL_TILT_DEG = 60.0
 # pays -100 a second for every extra airborne step, and one landing a radian off its heading pays
 # -5 a second until the episode ends, both soon past the -10 of a fall before the request. Run 2,
 # with neither, stood by iteration 300. So they start at run 2's level and go strict by 2000.
+# The rule, learnt four times: any per-step price after the request that a noisy policy's flailing
+# runs up must start low, or reaching the request costs more than falling before it. Run 3e priced
+# every neck and head joint's speed at -0.1 from the start and stuck like run 3 (entropy 18.8 at
+# iteration 300, every episode a fall).
 STRICT_STAGES = {
     "jump_extra": ((0, -20.0), (1500, -50.0), (2000, -100.0)),
     "jump_heading": ((0, -0.5), (1500, -2.0), (2000, -5.0)),
+    "jump_head_twist": ((0, 0.0), (750, -0.05), (1500, -0.1)),
 }
 # Reward parameters by training iteration, (iteration, value): the flight's squat floor comes down
 # once it jumps, so it learns to jump first and is then pushed to squat for it.
@@ -357,7 +362,7 @@ def make_dukki_jump_env_cfg(play: bool = False):
     )
     cfg.rewards["jump_squat"] = RewardTermCfg(func=jump_squat, weight=10.0 / 0.02)  # once, undoing dt
     cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=STRICT_STAGES["jump_heading"][0][1])
-    cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=-0.1)
+    cfg.rewards["jump_head_twist"] = RewardTermCfg(func=jump_head_twist, weight=STRICT_STAGES["jump_head_twist"][0][1])
     cfg.rewards["jump_extra"] = RewardTermCfg(func=jump_extra, weight=STRICT_STAGES["jump_extra"][0][1])
     # Run 2's price. Besides discouraging hopping unasked, it is what tells a noisy early policy to
     # act less randomly: its flailing hops are charged, and calmer actions are the cheapest fix, so
