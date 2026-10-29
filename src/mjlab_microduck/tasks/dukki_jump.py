@@ -107,6 +107,12 @@ squat bonus paid for any real take-off, and 5 mm of height paid about 2. No leve
     and half for the extension by take-off, each paid on its own (NECK_EXT_SHARE).
 Resumed from run 3m's 5000.
 
+Run 3n (5500) rose 23 mm from a 41 mm squat, one clean jump in 99.8%, but the extension was
+measured from the neck squat to the take-off angle without a cap: with no neck squat it flung
+both joints 0.74 rad past standing at take-off for the full extension share, and the heading
+change grew to 56 deg. Run 3o: the extension counts only up to the neck squat's depth.
+Resumed from run 3n's 5500.
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
@@ -356,8 +362,9 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         self.first |= starts_first
         self.launch_ok |= starts_first & (torch.maximum(self.approach_tilt, tilt) < TAKEOFF_MAX_TILT_DEG)
         self.neck_extended |= starts_first & (torch.maximum(dn, dh) < NECK_EXTENDED_RAD)
-        # Extension: from the squat to the more flexed joint at take-off (both must come back).
-        ext = (self.neck_low - torch.maximum(dn, dh)).clamp_min(0.0)
+        # Extension: from the squat to the more flexed joint at take-off (both must come back),
+        # at most the squat itself: past standing is a fling (run 3n, 0.74 rad from no squat).
+        ext = torch.minimum((self.neck_low - torch.maximum(dn, dh)).clamp_min(0.0), self.neck_low)
         self.neck_ext = torch.where(starts_first, ext, self.neck_ext)
         in_first = self.first & flight_now & self.launch_ok
         self.flight_peak = torch.where(in_first, torch.maximum(self.flight_peak, z - STAND_Z), self.flight_peak)
