@@ -6,6 +6,8 @@ Per robot, from the jump task's own state (JumpCommand) and the robot:
     jumped once   one flight, started in the request window from an upright take-off, and landed
     settled       of those, still upright on the ground 0.5 s after landing (when the jump is paid)
     squat         trunk and head drop below their heights at the request, before take-off
+    neck squat    both neck pitch joints flexed together before take-off, rad; extended by take-off
+    head level    worst gap between the two neck pitch joints' changes, request to landing
     rise          trunk peak in the first flight above its height at the request
     upright end   standing (trunk above 105 mm, tilt under 20 deg) at the end
     heading       |heading change| from the request to the end
@@ -138,11 +140,14 @@ def main():
 
     label = "scripted jump" if args.scripted else args.checkpoint
     print(f"== {label} on {args.task}, {n} robots, one {cfg.episode_length_s:.0f} s episode each")
+    print(f"  neck extended by take-off {pct(once & cmd.neck_extended):5.1f}% (of all)")
     print(f"  jumped once {pct(once):5.1f}%   of which settled {pct(once & cmd.settled):5.1f}%   more than once {pct(extra):5.1f}%   no jump {pct(alive & (cmd.flights == 0)):5.1f}%   fell {pct(fell):5.1f}%   upright at the end {pct(upright):5.1f}%")
     for title, x, mask, unit, scale in (
         ("rise (jumped once)", rise, once, "mm", 1000),
         ("squat, trunk", squat_trunk, once, "mm", 1000),
         ("squat, head", squat_head, once, "mm", 1000),
+        ("neck squat (jumped once)", cmd.neck_low, once, "rad", 1),
+        ("head level error (jumped once)", cmd.level_err_max, once, "deg", 180 / math.pi),
         ("heading change (alive)", heading, alive & cmd.requested, "deg", 1),
         ("time at torque limit (alive)", at_limit, alive, "s", 1),
         ("head yaw peak torque (alive)", head_yaw_peak, alive, "N.m", 1),
