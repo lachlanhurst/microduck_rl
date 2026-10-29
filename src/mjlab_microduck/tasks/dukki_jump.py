@@ -96,6 +96,17 @@ than a jump: 13 mm of rise from a 29 mm trunk squat, the head barely used. The f
     roll, so the head may pitch fast but only level (run 3d flung it with the head tilting).
 Resumed from run 3l's 4499 with the action std reset to 0.3.
 
+Run 3m (5000) squatted the trunk the full 43 mm, one clean jump in 100%, heading drift halved
+(9 deg), but rose only 4.6 mm, what a take-off at exactly the 0.3 m/s bar gives (v^2/2g): the
+squat bonus paid for any real take-off, and 5 mm of height paid about 2. No level neck squat
+(level error down from 44 to 25 deg, the extension at take-off found in 4%). Run 3n:
+  - the take-off bar rises from 0.3 to 0.6 m/s (about 18 mm) by iteration 6100;
+  - the squat bonus is scaled by the jump's height, HEIGHT_FLOOR at none, full at SQUAT_RISE_FULL_M,
+    so a deep squat into a token hop earns little, but any jump still beats none;
+  - the neck bonus is worth as much as the trunk's (NECK_SHARE 1), half for the level neck squat
+    and half for the extension by take-off, each paid on its own (NECK_EXT_SHARE).
+Resumed from run 3m's 5000.
+
 Rewards (scaled by dt like every mjlab term):
   jump_stand      height x upright x leg pose, multiplied (a sagging pose at the right height must
                   not score; the backflip lesson again), paid before the window and once landed
@@ -143,14 +154,18 @@ GRACE_S = 0.3  # a take-off this soon after the window still counts as the jump
 FLIGHT_MAX_TILT_DEG = 30.0
 FLIGHT_MIN_Z = STAND_Z - 0.02
 TAKEOFF_MAX_TILT_DEG = 25.0
-TAKEOFF_MIN_VZ = 0.3  # m/s, trunk vertical speed for a real take-off, once fully ramped in
+TAKEOFF_MIN_VZ = 0.6  # m/s, trunk vertical speed for a real take-off, once fully ramped in
 # The take-off speed by training iteration, (iteration, m/s). Run 3g, resumed from run 3f's 2250
 # with 0.3 from the start, never once took off in 350 iterations (action std 0.14): the missed
 # price is flat, and nothing paid a push that fell short. Starting at 0.1 pays the squat bonus
 # for a small push and the bar rises from there. A drop still cannot count: its speed is
 # downwards. The steps are absolute (a resume restores the step counter), set for a resume
 # from 2250; from scratch it stays at 0.1 until 2400.
-TAKEOFF_VZ_STAGES = ((0, 0.1), (2400, 0.15), (2600, 0.2), (2800, 0.25), (3000, TAKEOFF_MIN_VZ))
+# Run 3m sat at the 0.3 bar (4.6 mm of rise), so from 5000 it rises again to TAKEOFF_MIN_VZ.
+TAKEOFF_VZ_STAGES = (
+    (0, 0.1), (2400, 0.15), (2600, 0.2), (2800, 0.25), (3000, 0.3),
+    (5100, 0.35), (5300, 0.4), (5500, 0.45), (5700, 0.5), (5900, 0.55), (6100, TAKEOFF_MIN_VZ),
+)
 FLIGHT_HEIGHT_UNIT = 0.02  # m of trunk height above standing per extra unit of flight reward
 FALL_TILT_DEG = 60.0
 # Weights by training iteration for the two prices that can make an early, noisy policy prefer to
@@ -182,7 +197,10 @@ SQUAT_FULL_M = 0.040  # trunk squat for the full bonus: the legs reach about 43 
 NECK_JOINTS = ("neck_pitch", "head_pitch")  # equal changes from standing keep the head level
 NECK_SQUAT_FULL_RAD = 0.5  # both flexed this far from standing for the full neck squat (15 mm)
 NECK_EXTENDED_RAD = 0.15  # both back within this of standing at take-off: the neck was used
-NECK_SHARE = 0.5  # the neck squat's part of the squat bonus, against the trunk's 1
+NECK_SHARE = 1.0  # the neck's part of the squat bonus, against the trunk's 1
+NECK_EXT_SHARE = 0.5  # of the neck's part, the share for extending by take-off; the rest the squat
+SQUAT_RISE_FULL_M = 0.02  # jump height (trunk above standing) for the full squat bonus
+HEIGHT_FLOOR = 0.3  # share of the squat bonus for a jump with no height
 HEAD_BODY = "jaw_soft"  # top of the neck chain, 225 mm when standing
 
 
@@ -223,6 +241,8 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         # take-off, rad; whether they were back near standing at take-off; the worst level error.
         self.neck_low = torch.zeros(n, device=dev)
         self.neck_extended = torch.zeros(n, dtype=torch.bool, device=dev)
+        # How far the neck came back from its squat by take-off, rad.
+        self.neck_ext = torch.zeros(n, device=dev)
         self.level_err_max = torch.zeros(n, device=dev)
         self._neck_ids = None
         self.t_land = torch.zeros(n, device=dev)
@@ -259,6 +279,7 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         self.flight_peak[env_ids] = 0.0
         self.neck_low[env_ids] = 0.0
         self.neck_extended[env_ids] = False
+        self.neck_ext[env_ids] = 0.0
         self.level_err_max[env_ids] = 0.0
         self.flights[env_ids] = 0
         self.vel_command_b[env_ids] = 0.0
@@ -276,8 +297,12 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
 
     @property
     def neck_share(self) -> torch.Tensor:
-        """The neck squat as a share of NECK_SQUAT_FULL_RAD, 0 to 1, if extended by take-off."""
-        return (self.neck_low / NECK_SQUAT_FULL_RAD).clamp(0.0, 1.0) * self.neck_extended.float()
+        """0 to 1: (1 - NECK_EXT_SHARE) for the level neck squat and NECK_EXT_SHARE for coming back
+        from it by take-off, each a share of NECK_SQUAT_FULL_RAD. Run 3m, paying the squat only if
+        both joints were back near standing at take-off, never found it."""
+        squat = (self.neck_low / NECK_SQUAT_FULL_RAD).clamp(0.0, 1.0)
+        ext = (self.neck_ext / NECK_SQUAT_FULL_RAD).clamp(0.0, 1.0)
+        return (1.0 - NECK_EXT_SHARE) * squat + NECK_EXT_SHARE * ext
 
     def neck_offsets(self, robot) -> tuple[torch.Tensor, torch.Tensor]:
         """neck_pitch and head_pitch from standing, rad (positive lowers the head)."""
@@ -331,6 +356,9 @@ class JumpCommand(microduck_mdp.VelocityCommandCommandOnly):
         self.first |= starts_first
         self.launch_ok |= starts_first & (torch.maximum(self.approach_tilt, tilt) < TAKEOFF_MAX_TILT_DEG)
         self.neck_extended |= starts_first & (torch.maximum(dn, dh) < NECK_EXTENDED_RAD)
+        # Extension: from the squat to the more flexed joint at take-off (both must come back).
+        ext = (self.neck_low - torch.maximum(dn, dh)).clamp_min(0.0)
+        self.neck_ext = torch.where(starts_first, ext, self.neck_ext)
         in_first = self.first & flight_now & self.launch_ok
         self.flight_peak = torch.where(in_first, torch.maximum(self.flight_peak, z - STAND_Z), self.flight_peak)
         ended_first = touchdown & self.first
@@ -425,11 +453,13 @@ def jump_hop_early(env) -> torch.Tensor:
 
 def jump_squat(env) -> torch.Tensor:
     """Once, at the landing of a first flight from an upright take-off: the trunk squat before it,
-    as a share of SQUAT_FULL_M (capped at 1), plus NECK_SHARE of the neck squat's share if the
-    neck was extended again by take-off. Paid at touchdown: held until the landing settled, runs
-    3i and 3k stopped jumping. A second hop is priced by jump_retake instead."""
+    as a share of SQUAT_FULL_M (capped at 1), plus NECK_SHARE of the neck's share (squat and
+    extension), all times the jump's height: HEIGHT_FLOOR for none, full at SQUAT_RISE_FULL_M
+    (run 3m squatted 43 mm into a 4.6 mm hop). Paid at touchdown: held until the landing settled,
+    runs 3i and 3k stopped jumping. A second hop is priced by jump_retake instead."""
     cmd = _jump(env)
-    return (cmd.squat_share + NECK_SHARE * cmd.neck_share) * cmd.landed_now.float()
+    height = HEIGHT_FLOOR + (1.0 - HEIGHT_FLOOR) * (cmd.flight_peak / SQUAT_RISE_FULL_M).clamp(0.0, 1.0)
+    return (cmd.squat_share + NECK_SHARE * cmd.neck_share) * height * cmd.landed_now.float()
 
 
 def jump_heading(env) -> torch.Tensor:

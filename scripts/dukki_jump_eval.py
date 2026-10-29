@@ -147,6 +147,7 @@ def main():
         ("squat, trunk", squat_trunk, once, "mm", 1000),
         ("squat, head", squat_head, once, "mm", 1000),
         ("neck squat (jumped once)", cmd.neck_low, once, "rad", 1),
+        ("neck extension by take-off", cmd.neck_ext, once, "rad", 1),
         ("head level error (jumped once)", cmd.level_err_max, once, "deg", 180 / math.pi),
         ("heading change (alive)", heading, alive & cmd.requested, "deg", 1),
         ("time at torque limit (alive)", at_limit, alive, "s", 1),
