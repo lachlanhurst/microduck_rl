@@ -6,8 +6,9 @@ Per robot, from the jump task's own state (JumpCommand) and the robot:
     jumped once   one flight, started in the request window from an upright take-off, and landed
     settled       of those, still upright on the ground 0.5 s after landing (when the jump is paid)
     squat         trunk and head drop below their heights at the request, before take-off
-    neck squat    the head's level drop on the trunk before take-off; how much is back at take-off
+    neck squat    the head's drop on the trunk before take-off; how much of it is back at take-off
     head level    worst gap between the two neck pitch joints' changes, request to landing
+    style         jump_outcome's leg and neck squat shares, 0 to 1
     rise          trunk peak in the first flight above its height at the request
     upright end   standing (trunk above 105 mm, tilt under 20 deg) at the end
     heading       |heading change| from the request to the end
@@ -147,6 +148,8 @@ def main():
         ("squat, head", squat_head, once, "mm", 1000),
         ("neck squat (jumped once)", cmd.neck_drop, once, "mm", 1000),
         ("neck extension by take-off", cmd.neck_ext, once, "mm", 1000),
+        ("leg squat share", cmd.leg_share, once, "", 1),
+        ("neck squat share", cmd.neck_share, once, "", 1),
         ("head level error (jumped once)", cmd.level_err_max, once, "deg", 180 / math.pi),
         ("heading change (alive)", heading, alive & cmd.requested, "deg", 1),
         ("time at torque limit (alive)", at_limit, alive, "s", 1),
