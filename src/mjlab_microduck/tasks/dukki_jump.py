@@ -519,7 +519,9 @@ def make_dukki_jump_env_cfg(play: bool = False):
     cfg.rewards["jump_stand"] = RewardTermCfg(func=jump_stand, weight=2.0)
     cfg.rewards["jump_push"] = RewardTermCfg(func=jump_push, weight=10.0)
     cfg.rewards["jump_flight"] = RewardTermCfg(
-        func=jump_flight, weight=10.0 / 0.02,  # once, undoing dt params={"squat_floor": STRICT_PARAM_STAGES[("jump_flight", "squat_floor")][0][1]}
+        func=jump_flight,
+        weight=10.0 / 0.02,  # once, undoing dt
+        params={"squat_floor": STRICT_PARAM_STAGES[("jump_flight", "squat_floor")][0][1]},
     )
     cfg.rewards["jump_squat"] = RewardTermCfg(func=jump_squat, weight=10.0 / 0.02)  # once, undoing dt
     cfg.rewards["jump_heading"] = RewardTermCfg(func=jump_heading, weight=STRICT_STAGES["jump_heading"][0][1])
