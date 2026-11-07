@@ -1,7 +1,7 @@
 <?xml version="1.0" ?>
 <!-- Generated using onshape-to-robot -->
 <!-- Onshape https://cad.onshape.com/documents/804927696f06d877f3f1803e/w/5b75db19292e71970de02dee/e/ed34b749f5a3718f68024fd5 -->
-<!-- Geometry, battery and IMU site replaced from the Dukki Fusion 360 model (claude_test, Microduck project); joints, bodies and the other inertials are the Onshape export's. -->
+<!-- Geometry, inertials and IMU site from the Dukki Fusion 360 model (claude_test, Microduck project): printed parts from their PA12 SLS / TPU materials, bought parts weighed (f360_to_mjcf masses.json); joints and bodies are the Onshape export's. -->
 <mujoco model="microduck">
   <compiler angle="radian" meshdir="assets" autolimits="true"/>
   <default>
@@ -95,7 +95,7 @@
     <!-- Link trunk_base -->
     <body name="trunk_base" pos="0 0 0.12" quat="1 0 0 0" childclass="microduck">
       <freejoint name="trunk_base_freejoint"/>
-      <inertial pos="-0.0282345 -1.15885e-05 -0.00432743" mass="0.231224" fullinertia="0.000159397 0.000200934 0.000158688 1.19642e-07 -4.79742e-05 1.89059e-07"/>
+      <inertial pos="-0.0232787 0.00063159 -0.00169577" mass="0.280793" fullinertia="0.00019643 0.000256692 0.000214817 -1.08331e-06 -6.33002e-05 -3.56653e-06"/>
       <!-- Part trunk_base -->
       <geom type="mesh" class="visual" pos="0.0169985 -4.96946e-05 2.14658e-05" quat="0.707124 0 0 0.70709" mesh="trunk_base" material="trunk_base_material"/>
       <!-- Part left_shell -->
@@ -131,7 +131,7 @@
         <!-- Joint from trunk_base to yaw2roll -->
         <joint axis="0 0 1" name="left_hip_yaw" type="hinge" range="-0.4363323129985824 0.5235987755982988" class="chosen_actuator"/>
         <joint axis="0 0 1" name="passive_left_hip_yaw_backlash" type="hinge" class="backlash"/>
-        <inertial pos="-8.8e-11 0.00099414 0.0168917" mass="0.0230406" fullinertia="4.1964e-06 3.41752e-06 2.3265e-06 -0 -0 -5.0881e-08"/>
+        <inertial pos="-8.81515e-05 0.00231579 0.0168923" mass="0.0471944" fullinertia="8.49263e-06 7.10713e-06 5.07513e-06 -3.8442e-09 1.98669e-08 3.56571e-07"/>
         <!-- Part yaw2roll -->
         <geom type="mesh" class="visual" pos="-4.95259e-05 -2.51229e-07 0.00292853" quat="0 -1 -2.39481e-05 0" mesh="yaw2roll" material="yaw2roll_material"/>
         <!-- Part j288 -->
@@ -145,7 +145,7 @@
           <!-- Joint from yaw2roll to hip_l -->
           <joint axis="0 0 1" name="left_hip_roll" type="hinge" range="-0.3839724354387525 0.3839724354387525" class="chosen_actuator"/>
           <joint axis="0 0 1" name="passive_left_hip_roll_backlash" type="hinge" class="backlash"/>
-          <inertial pos="0.014815 1.6179e-08 -0.00829992" mass="0.00618934" fullinertia="8.60626e-07 1.15753e-06 6.51588e-07 1e-12 3.89882e-07 -1e-12"/>
+          <inertial pos="0.0185155 6.97706e-05 -0.0124993" mass="0.00860901" fullinertia="1.21332e-06 1.38318e-06 7.57842e-07 0 4.4971e-07 0"/>
           <!-- Part hip_l -->
           <geom type="mesh" class="visual" pos="0.0164501 6.99246e-05 0.000450282" quat="0.707107 -0.707107 9.85728e-06 -4.3725e-05" mesh="hip_l" material="hip_l_material"/>
           <geom type="mesh" class="collision" pos="0.0164501 6.99246e-05 0.000450282" quat="0.707107 -0.707107 9.85728e-06 -4.3725e-05" mesh="hip_l" material="hip_l_material"/>
@@ -156,7 +156,7 @@
             <!-- Joint from hip_l to upper_leg_left -->
             <joint axis="0 0 1" name="left_hip_pitch" type="hinge" range="-1.570796326795005 1.5707963267947882" class="chosen_actuator"/>
             <joint axis="0 0 1" name="passive_left_hip_pitch_backlash" type="hinge" class="backlash"/>
-            <inertial pos="0.006766 0.0228838 0.0134531" mass="0.0482067" fullinertia="1.68753e-05 1.03691e-05 1.98269e-05 -4.41852e-06 2.27982e-07 3.89298e-07"/>
+            <inertial pos="0.00848689 0.0218987 0.0110032" mass="0.0889006" fullinertia="3.23419e-05 1.92912e-05 3.94476e-05 -1.06779e-05 1.05585e-06 7.33117e-07"/>
             <!-- Part upper_leg_left -->
             <geom type="mesh" class="visual" pos="-6.71625e-05 4.79718e-05 0.0279008" quat="0.706309 -9.90657e-06 4.37139e-05 -0.707904" mesh="upper_leg_left" material="upper_leg_left_material"/>
             <!-- Part upper_leg_rigidity_plate -->
@@ -172,7 +172,7 @@
               <!-- Joint from upper_leg_left to leg -->
               <joint axis="0 0 1" name="left_knee" type="hinge" range="-1.570796326795012 1.570796326794781" class="chosen_actuator"/>
               <joint axis="0 0 1" name="passive_left_knee_backlash" type="hinge" class="backlash"/>
-              <inertial pos="-1.52e-10 0.0318937 -0.00953505" mass="0.0215844" fullinertia="5.25056e-06 2.15507e-06 4.33925e-06 -1e-12 0 7.65005e-07"/>
+              <inertial pos="4.59457e-05 0.0351043 -0.0106727" mass="0.0438438" fullinertia="9.28723e-06 4.74345e-06 7.71815e-06 1.77601e-08 1.3175e-09 7.0797e-07"/>
               <!-- Part leg -->
               <geom type="mesh" class="visual" pos="8.72882e-06 0.027761 0.00155103" quat="0.70709 -0.000152186 0.707124 0.000205777" mesh="leg" material="leg_material"/>
               <geom type="mesh" class="collision" pos="8.72882e-06 0.027761 0.00155103" quat="0.70709 -0.000152186 0.707124 0.000205777" mesh="leg" material="leg_material"/>
@@ -226,7 +226,7 @@
         <!-- Joint from trunk_base to neck -->
         <joint axis="0 0 1" name="neck_pitch" type="hinge" range="-1.5707963267948966 1.0471975511965976" class="chosen_actuator"/>
         <joint axis="0 0 1" name="passive_neck_pitch_backlash" type="hinge" class="backlash"/>
-        <inertial pos="0 -0.025 0.0141665" mass="0.0368414" fullinertia="1.72925e-05 3.12694e-06 1.63707e-05 0 0 0"/>
+        <inertial pos="6.11978e-06 -0.0249999 0.0150907" mass="0.0784267" fullinertia="4.15301e-05 7.29949e-06 4.01815e-05 -3.53634e-08 0 0"/>
         <!-- Part j288 -->
         <geom type="mesh" class="visual" pos="-5.02458e-07 -0.0075 0.00799999" quat="0.707107 0 -0.707107 0" mesh="j288" material="j288_material"/>
         <!-- Part j288_2 -->
@@ -240,7 +240,7 @@
           <!-- Joint from neck to neck_pitch -->
           <joint axis="0 0 1" name="head_pitch" type="hinge" range="-1.5707963267948974 1.5707963267948957" class="chosen_actuator"/>
           <joint axis="0 0 1" name="passive_head_pitch_backlash" type="hinge" class="backlash"/>
-          <inertial pos="-6.533e-09 0.0116641 -0.0145" mass="0.00572" fullinertia="1.09186e-06 9.66855e-07 5.12111e-07 0 0 0"/>
+          <inertial pos="-5.19074e-07 0.00948073 -0.0145653" mass="0.00281372" fullinertia="4.92558e-07 4.40016e-07 2.05867e-07 0 0 -1.74886e-09"/>
           <!-- Part neck_pitch -->
           <geom type="mesh" class="visual" pos="-4.89433e-07 1.9759e-08 -0.0289997" quat="0 0 -1 0" mesh="neck_pitch" material="neck_pitch_material"/>
           <!-- Link yaw_roll_motion -->
@@ -248,7 +248,7 @@
             <!-- Joint from neck_pitch to yaw_roll_motion -->
             <joint axis="0 0 1" name="head_yaw" type="hinge" range="-2.967059728390373 2.967059728390348" class="chosen_actuator"/>
             <joint axis="0 0 1" name="passive_head_yaw_backlash" type="hinge" class="backlash"/>
-            <inertial pos="-0.000166657 -0.00500964 0.0178065" mass="0.0486" fullinertia="6.97903e-06 8.10293e-06 9.57884e-06 3.21657e-07 -3.4797e-08 3.4295e-07"/>
+            <inertial pos="7.31606e-05 -0.00567629 0.0143288" mass="0.0434346" fullinertia="7.15468e-06 4.57468e-06 6.71253e-06 4.85544e-08 8.20398e-09 1.74053e-07"/>
             <!-- Part yaw_roll_motion -->
             <geom type="mesh" class="visual" pos="-0.00100111 0.00950027 0.0280067" quat="0.707107 0 0 0.707107" mesh="yaw_roll_motion" material="yaw_roll_motion_material"/>
             <!-- Part j288 -->
@@ -258,7 +258,7 @@
               <!-- Joint from yaw_roll_motion to jaw_soft -->
               <joint axis="0 0 1" name="head_roll" type="hinge" range="-0.43633231299859127 0.4363323129985735" class="chosen_actuator"/>
               <joint axis="0 0 1" name="passive_head_roll_backlash" type="hinge" class="backlash"/>
-              <inertial pos="0.00460523 0.00120047 -0.0324761" mass="0.188766" fullinertia="0.000320812 0.0002541 0.000149882 -6.32289e-07 6.57154e-06 4.18475e-06"/>
+              <inertial pos="0.00909628 0.00185737 -0.0249113" mass="0.2377" fullinertia="0.000335076 0.000264874 0.000164607 2.92964e-06 3.62685e-05 3.9197e-06"/>
               <!-- Part bottom_head_shell -->
               <geom type="mesh" class="visual" pos="-0.00439334 2.67942e-07 -0.0178989" quat="0.5 0.5 0.5 0.5" mesh="bottom_head_shell" material="bottom_head_shell_material"/>
               <geom type="mesh" class="collision" pos="-0.00439334 2.67942e-07 -0.0178989" quat="0.5 0.5 0.5 0.5" mesh="bottom_head_shell" material="bottom_head_shell_material"/>
@@ -281,8 +281,6 @@
               <geom type="mesh" class="visual" pos="6.66311e-06 2.67942e-07 0.00210111" quat="0.412414 -0.574382 0.412414 0.574382" mesh="bearing_61702" material="bearing_61702_material"/>
               <!-- Part bearing_6700 -->
               <geom type="mesh" class="visual" pos="0.00310666 -0.0381999 -0.0178989" quat="0.489448 -0.510334 0.510334 -0.489448" mesh="bearing_6700" material="bearing_6700_material"/>
-              <!-- Part soft_mouth_top -->
-              <geom type="mesh" class="visual" pos="-0.00557797 1.39616e-07 -0.0435887" quat="0.5 -0.5 -0.5 0.5" mesh="soft_mouth_top" material="soft_mouth_top_material"/>
               <!-- Part tof -->
               <geom type="mesh" class="visual" pos="0.0166733 0.0253565 -0.0698" quat="0 -0.707107 -0.707107 0" mesh="tof" material="tof_material"/>
               <!-- Part camera -->
@@ -304,8 +302,6 @@
               <!-- Part jaw -->
               <geom type="mesh" class="visual" pos="0.00310666 1.39616e-07 -0.0178989" quat="0 0 -0.707107 -0.707107" mesh="jaw" material="jaw_material"/>
               <geom type="mesh" class="collision" pos="0.00310666 1.39616e-07 -0.0178989" quat="0 0 -0.707107 -0.707107" mesh="jaw" material="jaw_material"/>
-              <!-- Part jaw_soft -->
-              <geom type="mesh" class="visual" pos="-0.00657797 1.39616e-07 -0.0435887" quat="0.5 -0.5 -0.5 0.5" mesh="jaw_soft" material="jaw_soft_material"/>
               <!-- Frame head_camera -->
               <site group="3" name="head_camera" pos="0.0155 -9.13778e-05 -0.0733" quat="0.707107 0 0.707107 -0"/>
               <camera name="head_camera" pos="0.0155 -9.13778e-05 -0.0733" quat="0 0 -1 0"/>
@@ -324,7 +320,7 @@
         <!-- Joint from trunk_base to bearing_roll -->
         <joint axis="0 0 1" name="right_hip_yaw" type="hinge" range="-0.5235987755982988 0.4363323129985824" class="chosen_actuator"/>
         <joint axis="0 0 1" name="passive_right_hip_yaw_backlash" type="hinge" class="backlash"/>
-        <inertial pos="-8.8e-11 0.00099414 0.0168917" mass="0.0230406" fullinertia="4.1964e-06 3.41752e-06 2.3265e-06 -0 -0 -5.0881e-08"/>
+        <inertial pos="1.02903e-05 0.00231581 0.0168923" mass="0.0471944" fullinertia="8.49263e-06 7.10713e-06 5.07513e-06 -3.97855e-09 1.99479e-08 3.56569e-07"/>
         <!-- Part yaw2roll -->
         <geom type="mesh" class="visual" pos="4.98046e-05 -2.33939e-07 0.00292853" quat="0 -1 2.39481e-05 0" mesh="yaw2roll" material="yaw2roll_material"/>
         <!-- Part j288 -->
@@ -338,7 +334,7 @@
           <!-- Joint from bearing_roll to hip_l_2 -->
           <joint axis="0 0 1" name="right_hip_roll" type="hinge" range="-0.3839724354387525 0.3839724354387525" class="chosen_actuator"/>
           <joint axis="0 0 1" name="passive_right_hip_roll_backlash" type="hinge" class="backlash"/>
-          <inertial pos="0.014815 1.6212e-08 -0.00829992" mass="0.00618934" fullinertia="8.60626e-07 1.15753e-06 6.51588e-07 1e-12 3.89882e-07 -1e-12"/>
+          <inertial pos="0.0185152 -6.97616e-05 -0.0124993" mass="0.00860901" fullinertia="1.21332e-06 1.38318e-06 7.57842e-07 0 4.4971e-07 0"/>
           <!-- Part hip_l -->
           <geom type="mesh" class="visual" pos="0.0164498 -6.99206e-05 0.0004503" quat="0.707107 -0.707107 -4.3725e-05 9.85728e-06" mesh="hip_l" material="hip_l_material"/>
           <geom type="mesh" class="collision" pos="0.0164498 -6.99206e-05 0.0004503" quat="0.707107 -0.707107 -4.3725e-05 9.85728e-06" mesh="hip_l" material="hip_l_material"/>
@@ -349,7 +345,7 @@
             <!-- Joint from hip_l_2 to upper_leg_right -->
             <joint axis="0 0 1" name="right_hip_pitch" type="hinge" range="-1.5707963267949268 1.5707963267948664" class="chosen_actuator"/>
             <joint axis="0 0 1" name="passive_right_hip_pitch_backlash" type="hinge" class="backlash"/>
-            <inertial pos="-0.006766 0.0228838 0.0134531" mass="0.0482067" fullinertia="1.68753e-05 1.03691e-05 1.98269e-05 4.41852e-06 -2.27982e-07 3.89298e-07"/>
+            <inertial pos="-0.00852824 0.0219398 0.011003" mass="0.0889006" fullinertia="3.24446e-05 1.92282e-05 3.94873e-05 1.06473e-05 -1.05141e-06 7.28676e-07"/>
             <!-- Part upper_leg_right -->
             <geom type="mesh" class="visual" pos="6.73847e-05 4.76809e-05 0.0279005" quat="4.37139e-05 -0.707904 0.706309 -9.90657e-06" mesh="upper_leg_right" material="upper_leg_right_material"/>
             <!-- Part upper_leg_rigidity_plate_right -->
@@ -365,7 +361,7 @@
               <!-- Joint from upper_leg_right to leg_2 -->
               <joint axis="0 0 1" name="right_knee" type="hinge" range="-1.570796326794932 1.570796326794861" class="chosen_actuator"/>
               <joint axis="0 0 1" name="passive_right_knee_backlash" type="hinge" class="backlash"/>
-              <inertial pos="-0.0318937 -1.52e-10 -0.00953505" mass="0.0215844" fullinertia="2.15507e-06 5.25056e-06 4.33925e-06 1e-12 -7.65005e-07 0"/>
+              <inertial pos="-0.0351038 3.83144e-05 -0.0106724" mass="0.0438438" fullinertia="4.74342e-06 9.28726e-06 7.71816e-06 -1.30417e-08 -7.07969e-07 2.26384e-09"/>
               <!-- Part leg -->
               <geom type="mesh" class="visual" pos="-0.0277605 -8.57914e-06 0.00155131" quat="0.50012 -0.499843 0.500134 0.499904" mesh="leg" material="leg_material"/>
               <geom type="mesh" class="collision" pos="-0.0277605 -8.57914e-06 0.00155131" quat="0.50012 -0.499843 0.500134 0.499904" mesh="leg" material="leg_material"/>
@@ -417,7 +413,6 @@
     </body>
   </worldbody>
   <asset>
-    <mesh file="jaw_soft.stl"/>
     <mesh file="jaw.stl"/>
     <mesh file="neck.stl"/>
     <mesh file="leg.stl"/>
@@ -440,7 +435,6 @@
     <mesh file="motor_support.stl"/>
     <mesh file="yaw2roll.stl"/>
     <mesh file="rim.stl"/>
-    <mesh file="soft_mouth_top.stl"/>
     <mesh file="upper_leg_right.stl"/>
     <mesh file="upper_leg_rigidity_plate.stl"/>
     <mesh file="roller_blade.stl"/>
@@ -480,10 +474,8 @@
     <material name="neck_pitch_material" rgba="0.34902 0.376471 0.4 1"/>
     <material name="yaw_roll_motion_material" rgba="0.129412 0.152941 0.129412 1"/>
     <material name="face_part_material" rgba="0.67451 0.639216 0.603922 1"/>
-    <material name="jaw_soft_material" rgba="0.85098 0.756863 0.866667 1"/>
     <material name="motor_support_material" rgba="0.129412 0.152941 0.129412 1"/>
     <material name="top_head_shell_material" rgba="0.85098 0.85098 0.839216 1"/>
-    <material name="soft_mouth_top_material" rgba="0.85098 0.756863 0.866667 1"/>
     <material name="noenoeil_material" rgba="0.956863 0.686275 0.137255 1"/>
     <material name="jaw_material" rgba="1 0.403922 0.121569 1"/>
     <material name="bottom_head_shell_material" rgba="1 0.403922 0.121569 1"/>

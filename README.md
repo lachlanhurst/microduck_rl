@@ -117,8 +117,10 @@ end in `-Dukki` in place of `-MicroDuck`: `Mjlab-Velocity-{Flat,Rough}[-Backlash
 plus `Mjlab-Testbench-J288` (one servo on the pendulum rig it was identified on;
 `-Fast` drops its speed and torque penalties).
 
-- Robot (`robot/dukki_constants.py`): same MJCF, +21 g per servo (J288 39 g),
-  +32 g battery (6S pack), +100 g head electronics (estimate): 1.18 kg.
+- Robot: the shared MJCFs carry the Dukki's geometry and inertials from the
+  Fusion model (microduck-unitree `scripts/f360_to_mjcf`): printed parts from
+  their PA12 SLS / TPU materials, J288s (39 g), battery, bearings and
+  electronics weighed. 1.074 kg without cables and fasteners.
 - Actuator (`actuator/j288.py`): BAM M6 for the J288 from the
   [bam fork](https://github.com/lachlanhurst/bam/tree/unitree-j288)
   (torque-controlled firmware law, 15 ms speed filter on kd, 1.0 N·m clamp,

@@ -11,38 +11,31 @@ import mjlab_microduck.tasks  # noqa: F401
 from mjlab_microduck.robot import dukki_constants as dk
 from mjlab_microduck.robot import microduck_constants as mc
 
-# The 6S pack's mass is in the MJCF trunk already; only the servos and head are added.
-EXTRA = dk.NUM_SERVOS * dk.SERVO_EXTRA_MASS + dk.HEAD_EXTRA_MASS
+DUKKI_SPECS = [
+    mc.get_walk_spec,
+    mc.get_standup_spec,
+    mc.get_allcollisions_spec,
+    mc.get_walk_backlash_spec,
+    mc.get_backlash_spec,
+    mc.get_allcollisions_backlash_spec,
+]
 
 
-@pytest.mark.parametrize(
-    "base, dukki",
-    [
-        (mc.get_walk_spec, dk.get_dukki_walk_spec),
-        (mc.get_standup_spec, dk.get_dukki_standup_spec),
-        (mc.get_allcollisions_spec, dk.get_dukki_allcollisions_spec),
-        (mc.get_walk_backlash_spec, dk.get_dukki_walk_backlash_spec),
-        (mc.get_backlash_spec, dk.get_dukki_backlash_spec),
-        (mc.get_allcollisions_backlash_spec, dk.get_dukki_allcollisions_backlash_spec),
-    ],
-)
-def test_dukki_mass_added_on_every_model(base, dukki):
-    a, b = base().compile(), dukki().compile()
-    assert b.body_mass.sum() == pytest.approx(a.body_mass.sum() + EXTRA, abs=1e-6)
-    head = a.body(dk.HEAD_BODY_NAME).id
-    # Head: the electronics plus its two servos (head_roll and the jaw).
-    assert b.body_mass[head] == pytest.approx(
-        a.body_mass[head] + dk.HEAD_EXTRA_MASS + 2 * dk.SERVO_EXTRA_MASS, abs=1e-6
-    )
-    # Inertias stay physical (positive, triangle inequality) after the edit.
-    inertia = b.body_inertia[1:]
+@pytest.mark.parametrize("spec_fn", DUKKI_SPECS)
+def test_dukki_mass_on_every_model(spec_fn):
+    """Every model carries the Fusion inertials: 1.074 kg, without cables and fasteners."""
+    model = spec_fn().compile()
+    assert model.body_mass.sum() == pytest.approx(1.0738, abs=0.001)
+    # Inertias stay physical (positive, triangle inequality).
+    inertia = model.body_inertia[1:]
     assert (inertia > 0).all()
     s = inertia.sum(axis=1, keepdims=True)
     assert (2 * inertia <= s + 1e-12).all()
 
 
-def test_dukki_robot_is_about_1p18_kg():
-    assert dk.get_dukki_walk_spec().compile().body_mass.sum() == pytest.approx(1.184, abs=0.002)
+def test_dukki_models_use_the_shared_specs():
+    for name, (spec_fn, _) in dk._DUKKI_MODELS.items():
+        assert spec_fn in DUKKI_SPECS, name
 
 
 def _bench_env(**kw):

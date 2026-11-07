@@ -1,25 +1,11 @@
 """Dukki: the microduck reworked on Unitree J288 servos.
 
 Same kinematics, joint names and order as the microduck. The MJCFs carry the
-Dukki geometry from the Fusion model (J288 housings, 6S battery, bridge, head
-electronics) and the 6S pack's 132 g in the trunk inertial, but every other
-inertial is still the Onshape export's XL330 microduck. This module adds the
-two mass changes the MJCFs do not have yet, and the J288 actuator model.
-
-Mass changes, applied to the MJCF inertials by ``apply_dukki_masses``:
-
-* each of the 15 servos: J288 39 g against XL330 18 g, so +21 g per servo, as a
-  uniform box filling the servo housing's bounding box, in the body that
-  carries the housing;
-* head: compute module, carrier, buck, heatsink, amplifier, speaker and
-  microphone, estimated at 80 to 120 g net (dukki docs/hardware.md 11.1). +100 g
-  as a 55 x 40 x 20 mm box at the head body's current centre of mass. Replace
-  with the weighed head, and its real centre of mass, once built.
-
-The battery is no longer added here: the MJCF trunk already has the 6S pack
-(0.737 kg robot plus 32 g, 0.769 kg). The whole robot comes to about 1.18 kg.
-Each extra mass is added to its body's existing inertial with the
-parallel-axis theorem; the CAD masses are otherwise unchanged.
+Dukki itself: geometry from the Fusion model (J288 housings, 6S battery,
+bridge, head electronics) and every body's inertial from it too, the printed
+parts from their PA12 SLS / TPU materials and the bought parts weighed
+(microduck-unitree scripts/f360_to_mjcf, masses.json). The robot is 1.074 kg
+without cables and fasteners. This module adds the J288 actuator model.
 
 Actuators: ``J288DRActuatorCfg`` with the M6 fit from the bench
 (``bam/params/unitree_j288/m6.json`` in the bam fork). The reflected rotor
@@ -30,8 +16,6 @@ voltage range and command delay.
 
 from __future__ import annotations
 
-import mujoco
-import numpy as np
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
 from mjlab_microduck.actuator import J288DRActuatorCfg
@@ -39,7 +23,6 @@ from mjlab_microduck.robot.microduck_constants import (
     BACKLASH_HOME_FRAME,
     FULL_COLLISION,
     HOME_FRAME,
-    SERVO_MESH_NAME,
     get_allcollisions_backlash_spec,
     get_allcollisions_spec,
     get_backlash_spec,
@@ -47,135 +30,6 @@ from mjlab_microduck.robot.microduck_constants import (
     get_walk_backlash_spec,
     get_walk_spec,
 )
-
-# ── Masses [kg] ──────────────────────────────────────────────────────────────
-J288_MASS = 0.039
-XL330_MASS = 0.018
-SERVO_EXTRA_MASS = J288_MASS - XL330_MASS
-NUM_SERVOS = 15
-
-HEAD_BODY_NAME = "jaw_soft"
-HEAD_EXTRA_MASS = 0.100
-HEAD_EXTRA_SIZE = (0.055, 0.040, 0.020)  # box [m], head body axes
-
-
-def _box_inertia(mass: float, size) -> np.ndarray:
-    """Inertia tensor of a uniform box about its centre, box axes [kg.m^2]."""
-    x, y, z = size
-    return mass / 12.0 * np.diag([y * y + z * z, x * x + z * z, x * x + y * y])
-
-
-def _quat_to_mat(quat) -> np.ndarray:
-    mat = np.zeros(9)
-    mujoco.mju_quat2Mat(mat, np.asarray(quat, dtype=float))
-    return mat.reshape(3, 3)
-
-
-class _Inertial:
-    """A body's inertial in the body frame: mass, centre of mass, tensor about it."""
-
-    def __init__(self, mass: float, com: np.ndarray, inertia: np.ndarray):
-        self.mass, self.com, self.inertia = mass, com, inertia
-
-    def add(self, mass: float, com: np.ndarray, inertia: np.ndarray) -> None:
-        """Add a rigid mass (inertia about its own centre, body axes)."""
-        total = self.mass + mass
-        new_com = (self.mass * self.com + mass * com) / total
-
-        def shifted(m, c, inertia_c):
-            d = c - new_com
-            return inertia_c + m * (np.dot(d, d) * np.eye(3) - np.outer(d, d))
-
-        self.inertia = shifted(self.mass, self.com, self.inertia) + shifted(
-            mass, com, inertia
-        )
-        self.mass, self.com = total, new_com
-
-
-def apply_dukki_masses(
-    spec: mujoco.MjSpec,
-    servo_extra_mass: float = SERVO_EXTRA_MASS,
-    head_extra_mass: float = HEAD_EXTRA_MASS,
-) -> mujoco.MjSpec:
-    """Add the J288 and head-electronics masses to a microduck spec.
-
-    Works on every microduck model (walk, groundcontact, allcollisions and
-    their backlash twins): servo housings are found by mesh name on visual
-    geoms (no collision), which every model has exactly once per servo.
-    """
-    model = spec.copy().compile()
-
-    # Compiled geoms follow the spec's geom order; check it while pairing.
-    spec_geoms = list(spec.geoms)
-    assert len(spec_geoms) == model.ngeom
-    inertials: dict[str, _Inertial] = {}
-
-    def inertial(body_id: int) -> _Inertial:
-        name = model.body(body_id).name
-        if name not in inertials:
-            rot = _quat_to_mat(model.body_iquat[body_id])
-            inertials[name] = _Inertial(
-                float(model.body_mass[body_id]),
-                model.body_ipos[body_id].copy(),
-                rot @ np.diag(model.body_inertia[body_id]) @ rot.T,
-            )
-        return inertials[name]
-
-    def add_mesh_box(geom_id: int, mass: float) -> None:
-        """A uniform box filling the geom's bounding box (geom frame)."""
-        rot = _quat_to_mat(model.geom_quat[geom_id])
-        centre = model.geom_pos[geom_id] + rot @ model.geom_aabb[geom_id, :3]
-        inertia = rot @ _box_inertia(mass, 2.0 * model.geom_aabb[geom_id, 3:]) @ rot.T
-        inertial(model.geom_bodyid[geom_id]).add(mass, centre, inertia)
-
-    servo_mesh = model.mesh(SERVO_MESH_NAME).id
-    n_servos = 0
-    for gid, sgeom in enumerate(spec_geoms):
-        assert sgeom.parent.name == model.body(model.geom_bodyid[gid]).name
-        visual = model.geom_contype[gid] == 0 and model.geom_conaffinity[gid] == 0
-        if not visual or model.geom_type[gid] != mujoco.mjtGeom.mjGEOM_MESH:
-            continue
-        if model.geom_dataid[gid] == servo_mesh:
-            add_mesh_box(gid, servo_extra_mass)
-            n_servos += 1
-    assert n_servos == NUM_SERVOS, f"found {n_servos} servo housings"
-
-    head = inertial(model.body(HEAD_BODY_NAME).id)
-    head.add(head_extra_mass, head.com.copy(), _box_inertia(head_extra_mass, HEAD_EXTRA_SIZE))
-
-    for body in spec.bodies:
-        if body.name in inertials:
-            new = inertials[body.name]
-            i = new.inertia
-            body.explicitinertial = True
-            body.mass = new.mass
-            body.ipos = new.com
-            body.fullinertia = [i[0, 0], i[1, 1], i[2, 2], i[0, 1], i[0, 2], i[1, 2]]
-    return spec
-
-
-def get_dukki_walk_spec() -> mujoco.MjSpec:
-    return apply_dukki_masses(get_walk_spec())
-
-
-def get_dukki_standup_spec() -> mujoco.MjSpec:
-    return apply_dukki_masses(get_standup_spec())
-
-
-def get_dukki_allcollisions_spec() -> mujoco.MjSpec:
-    return apply_dukki_masses(get_allcollisions_spec())
-
-
-def get_dukki_walk_backlash_spec() -> mujoco.MjSpec:
-    return apply_dukki_masses(get_walk_backlash_spec())
-
-
-def get_dukki_backlash_spec() -> mujoco.MjSpec:
-    return apply_dukki_masses(get_backlash_spec())
-
-
-def get_dukki_allcollisions_backlash_spec() -> mujoco.MjSpec:
-    return apply_dukki_masses(get_allcollisions_backlash_spec())
 
 
 # ── J288 actuators ───────────────────────────────────────────────────────────
@@ -226,12 +80,12 @@ def make_j288_actuators(**overrides) -> J288DRActuatorCfg:
 
 # Model name -> (spec_fn, init state). Mirrors the microduck robot cfgs.
 _DUKKI_MODELS = {
-    "walk": (get_dukki_walk_spec, HOME_FRAME),
-    "standup": (get_dukki_standup_spec, HOME_FRAME),
-    "allcollisions": (get_dukki_allcollisions_spec, HOME_FRAME),
-    "walk_backlash": (get_dukki_walk_backlash_spec, BACKLASH_HOME_FRAME),
-    "backlash": (get_dukki_backlash_spec, BACKLASH_HOME_FRAME),
-    "allcollisions_backlash": (get_dukki_allcollisions_backlash_spec, BACKLASH_HOME_FRAME),
+    "walk": (get_walk_spec, HOME_FRAME),
+    "standup": (get_standup_spec, HOME_FRAME),
+    "allcollisions": (get_allcollisions_spec, HOME_FRAME),
+    "walk_backlash": (get_walk_backlash_spec, BACKLASH_HOME_FRAME),
+    "backlash": (get_backlash_spec, BACKLASH_HOME_FRAME),
+    "allcollisions_backlash": (get_allcollisions_backlash_spec, BACKLASH_HOME_FRAME),
 }
 
 
