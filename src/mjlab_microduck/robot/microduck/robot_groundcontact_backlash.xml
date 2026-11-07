@@ -187,10 +187,10 @@
                 <joint axis="0 0 1" name="passive_left_ankle_backlash" type="hinge" class="backlash"/>
                 <inertial pos="-0.00615742 -0.0137483 -0.0156585" mass="0.0300246" fullinertia="5.91525e-06 1.11534e-05 7.74016e-06 -2.05354e-07 8.218e-08 5.6722e-08"/>
                 <!-- Part foot_left -->
-                <geom type="mesh" class="visual" pos="-0.00665487 -0.0123048 -0.0146534" quat="0.507014 -0.492861 -0.507001 -0.492923" mesh="foot_left" material="foot_left_material"/>
+                <geom type="mesh" class="visual" pos="-0.00697439 -0.0121264 -0.0146534" quat="0.50052 -0.499456 -0.500506 -0.499518" mesh="foot_left" material="foot_left_material"/>
                 <!-- Part sole_left -->
-                <geom type="mesh" class="visual" pos="-0.00654498 -0.016196 -0.0147536" quat="0.491295 -0.507685 -0.522248 -0.477642" mesh="sole_left" material="sole_left_material"/>
-                <geom type="mesh" name="left_foot_collision" class="collision" pos="-0.00654498 -0.016196 -0.0147536" quat="0.491295 -0.507685 -0.522248 -0.477642" mesh="sole_left" material="sole_left_material"/>
+                <geom type="mesh" class="visual" pos="-0.0069664 -0.0160191 -0.0147537" quat="0.485002 -0.514477 -0.515557 -0.484032" mesh="sole_left" material="sole_left_material"/>
+                <geom type="mesh" name="left_foot_collision" class="collision" pos="-0.0069664 -0.0160191 -0.0147537" quat="0.485002 -0.514477 -0.515557 -0.484032" mesh="sole_left" material="sole_left_material"/>
                 <!-- Frame left_foot -->
                 <site group="3" name="left_foot" pos="-0 -0.0238146 -0.0140852" quat="0 -0 -0.707107 -0.707107"/>
               </body>
@@ -357,10 +357,10 @@
                 <joint axis="0 0 1" name="passive_right_ankle_backlash" type="hinge" class="backlash"/>
                 <inertial pos="0.00615539 -0.0137482 -0.0156566" mass="0.0300251" fullinertia="5.91534e-06 1.11534e-05 7.74015e-06 2.04877e-07 -8.2467e-08 5.7017e-08"/>
                 <!-- Part foot_right -->
-                <geom type="mesh" class="visual" pos="0.00665454 -0.0123003 -0.0146468" quat="0.507001 0.492923 -0.507014 0.492861" mesh="foot_right" material="foot_right_material"/>
+                <geom type="mesh" class="visual" pos="0.00696761 -0.0121256 -0.0146468" quat="0.500637 0.499387 -0.50065 0.499325" mesh="foot_right" material="foot_right_material"/>
                 <!-- Part sole_right -->
-                <geom type="mesh" class="visual" pos="0.00654515 -0.0161956 -0.0147539" quat="0.522248 0.477642 -0.491295 0.507685" mesh="sole_right" material="sole_right_material"/>
-                <geom type="mesh" name="right_foot_collision" class="collision" pos="0.00654515 -0.0161956 -0.0147539" quat="0.522248 0.477642 -0.491295 0.507685" mesh="sole_right" material="sole_right_material"/>
+                <geom type="mesh" class="visual" pos="0.00695818 -0.0160224 -0.0147539" quat="0.515692 0.483905 -0.485128 0.514342" mesh="sole_right" material="sole_right_material"/>
+                <geom type="mesh" name="right_foot_collision" class="collision" pos="0.00695818 -0.0160224 -0.0147539" quat="0.515692 0.483905 -0.485128 0.514342" mesh="sole_right" material="sole_right_material"/>
                 <!-- Frame right_foot -->
                 <site group="3" name="right_foot" pos="0 -0.0238146 -0.0140852" quat="0.707107 -0.707107 -0 0"/>
               </body>
