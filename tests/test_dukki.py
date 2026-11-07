@@ -11,7 +11,8 @@ import mjlab_microduck.tasks  # noqa: F401
 from mjlab_microduck.robot import dukki_constants as dk
 from mjlab_microduck.robot import microduck_constants as mc
 
-EXTRA = dk.NUM_SERVOS * dk.SERVO_EXTRA_MASS + dk.BATTERY_EXTRA_MASS + dk.HEAD_EXTRA_MASS
+# The 6S pack's mass is in the MJCF trunk already; only the servos and head are added.
+EXTRA = dk.NUM_SERVOS * dk.SERVO_EXTRA_MASS + dk.HEAD_EXTRA_MASS
 
 
 @pytest.mark.parametrize(

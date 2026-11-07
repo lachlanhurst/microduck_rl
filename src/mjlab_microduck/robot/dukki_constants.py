@@ -1,24 +1,25 @@
 """Dukki: the microduck reworked on Unitree J288 servos.
 
-Same kinematics, meshes, joint names and order as the microduck (the J288 has
-the XL330's 20 x 34 x 26 mm envelope, so the CAD and joint frames are kept), with
-three mass changes and the J288 actuator model.
+Same kinematics, joint names and order as the microduck. The MJCFs carry the
+Dukki geometry from the Fusion model (J288 housings, 6S battery, bridge, head
+electronics) and the 6S pack's 132 g in the trunk inertial, but every other
+inertial is still the Onshape export's XL330 microduck. This module adds the
+two mass changes the MJCFs do not have yet, and the J288 actuator model.
 
 Mass changes, applied to the MJCF inertials by ``apply_dukki_masses``:
 
 * each of the 15 servos: J288 39 g against XL330 18 g, so +21 g per servo, as a
   uniform box filling the servo housing's bounding box, in the body that
   carries the housing;
-* battery: the 6S pack weighs 132 g against about 100 g for the NP-F550, so
-  +32 g at the pack's place in the trunk;
 * head: compute module, carrier, buck, heatsink, amplifier, speaker and
   microphone, estimated at 80 to 120 g net (dukki docs/hardware.md 11.1). +100 g
   as a 55 x 40 x 20 mm box at the head body's current centre of mass. Replace
   with the weighed head, and its real centre of mass, once built.
 
-The whole robot goes from 0.737 kg to about 1.18 kg. Each extra mass is added to
-its body's existing inertial with the parallel-axis theorem; the CAD masses are
-otherwise unchanged.
+The battery is no longer added here: the MJCF trunk already has the 6S pack
+(0.737 kg robot plus 32 g, 0.769 kg). The whole robot comes to about 1.18 kg.
+Each extra mass is added to its body's existing inertial with the
+parallel-axis theorem; the CAD masses are otherwise unchanged.
 
 Actuators: ``J288DRActuatorCfg`` with the M6 fit from the bench
 (``bam/params/unitree_j288/m6.json`` in the bam fork). The reflected rotor
@@ -52,9 +53,6 @@ J288_MASS = 0.039
 XL330_MASS = 0.018
 SERVO_EXTRA_MASS = J288_MASS - XL330_MASS
 NUM_SERVOS = 15
-
-BATTERY_MESH_NAME = "np_f970"
-BATTERY_EXTRA_MASS = 0.132 - 0.100
 
 HEAD_BODY_NAME = "jaw_soft"
 HEAD_EXTRA_MASS = 0.100
@@ -97,10 +95,9 @@ class _Inertial:
 def apply_dukki_masses(
     spec: mujoco.MjSpec,
     servo_extra_mass: float = SERVO_EXTRA_MASS,
-    battery_extra_mass: float = BATTERY_EXTRA_MASS,
     head_extra_mass: float = HEAD_EXTRA_MASS,
 ) -> mujoco.MjSpec:
-    """Add the J288, 6S pack and head-electronics masses to a microduck spec.
+    """Add the J288 and head-electronics masses to a microduck spec.
 
     Works on every microduck model (walk, groundcontact, allcollisions and
     their backlash twins): servo housings are found by mesh name on visual
@@ -132,8 +129,7 @@ def apply_dukki_masses(
         inertial(model.geom_bodyid[geom_id]).add(mass, centre, inertia)
 
     servo_mesh = model.mesh(SERVO_MESH_NAME).id
-    battery_mesh = model.mesh(BATTERY_MESH_NAME).id
-    n_servos = n_batteries = 0
+    n_servos = 0
     for gid, sgeom in enumerate(spec_geoms):
         assert sgeom.parent.name == model.body(model.geom_bodyid[gid]).name
         visual = model.geom_contype[gid] == 0 and model.geom_conaffinity[gid] == 0
@@ -142,11 +138,7 @@ def apply_dukki_masses(
         if model.geom_dataid[gid] == servo_mesh:
             add_mesh_box(gid, servo_extra_mass)
             n_servos += 1
-        elif model.geom_dataid[gid] == battery_mesh:
-            add_mesh_box(gid, battery_extra_mass)
-            n_batteries += 1
     assert n_servos == NUM_SERVOS, f"found {n_servos} servo housings"
-    assert n_batteries == 1, f"found {n_batteries} battery geoms"
 
     head = inertial(model.body(HEAD_BODY_NAME).id)
     head.add(head_extra_mass, head.com.copy(), _box_inertia(head_extra_mass, HEAD_EXTRA_SIZE))

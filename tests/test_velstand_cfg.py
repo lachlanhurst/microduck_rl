@@ -11,6 +11,7 @@ import torch
 import mjlab_microduck.tasks  # noqa: F401  (registers tasks)
 from mjlab_microduck.robot.microduck_constants import (
     SERVO_GEOM_SUFFIX,
+    SERVO_MESH_NAME,
     get_allcollisions_backlash_spec,
     get_allcollisions_spec,
     get_standup_spec,
@@ -34,12 +35,12 @@ def _geom_names(model):
 def test_allcollisions_servo_geoms_are_named(spec_fn):
     model = spec_fn().compile()
     servo = [n for n in _geom_names(model) if n and n.endswith(SERVO_GEOM_SUFFIX)]
-    # 14 servos; one body carries a 15th xl330 housing mesh in the export.
+    # 14 servos; one body carries a 15th servo housing mesh in the export.
     assert len(servo) >= 14
     for n in servo:
         g = model.geom(n)
         assert g.contype[0] or g.conaffinity[0], f"{n} is not a collision geom"
-        assert mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_MESH, int(g.dataid[0])) == "xl330"
+        assert mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_MESH, int(g.dataid[0])) == SERVO_MESH_NAME
 
 
 def test_allcollisions_matches_groundcontact_kinematics():

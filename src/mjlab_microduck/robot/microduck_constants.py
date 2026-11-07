@@ -64,15 +64,17 @@ def get_walk_rollers_spec() -> mujoco.MjSpec:
     return mujoco.MjSpec.from_file(str(MICRODUCK_GROUNDCONTACT_ROLLERS_XML))
 
 
-SERVO_MESH_NAME = "xl330"
+# The Dukki geometry (f360_to_mjcf) replaced the XL330 housings with the J288's;
+# the inertials are still the XL330 export's (dukki_constants adds the difference).
+SERVO_MESH_NAME = "j288"
 SERVO_GEOM_SUFFIX = "_servo_collision"
 
 
 def name_servo_collision_geoms(spec: mujoco.MjSpec) -> mujoco.MjSpec:
-    """Name every collision geom that is an XL330 housing mesh.
+    """Name every collision geom that is a servo housing mesh.
 
-    The onshape-to-robot export leaves collision geoms unnamed (only the two
-    foot soles are named by the export config). The protective-fall tasks need a
+    The export leaves collision geoms unnamed (only the two foot soles are
+    named). The protective-fall tasks need a
     contact sensor on the servo housings specifically — a servo hitting the floor
     is the event that strips gears — so this names each housing collision geom
     ``<body>_<k>_servo_collision``. The ``_collision`` suffix puts them under
