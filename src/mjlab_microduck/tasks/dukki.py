@@ -53,6 +53,7 @@ from mjlab.envs import mdp as mjlab_mdp
 from mjlab.managers import EventTermCfg, RewardTermCfg
 from mjlab.managers.manager_base import ManagerTermBase
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg
 
 from mjlab_microduck.actuator import J288DRActuator
 from mjlab_microduck.robot.dukki_constants import (
@@ -327,6 +328,55 @@ def make_still_practice(cfg: ManagerBasedRlEnvCfg, prob: float = STILL_PROB) -> 
         cfg.events["push_robot"].func = push_unless_still
     if "seated_head_jerk" in cfg.events:
         cfg.events["seated_head_jerk"].func = head_jerk_unless_still
+    return cfg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sit-stand: head off the ground
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The sit-stand task lets the head touch the ground as a third support. On the
+#: Fusion inertials (08/11/2026) the October policy sat by pitching forward onto
+#: its head and rocking back off it into the seat. Dukki's head carries the
+#: camera, the compute module and the speaker, so it is kept off the ground: a
+#: cost for every step the neck or head touches the terrain, and a cost on the
+#: contact force above HEAD_GROUND_FREE_N, so a hard smack costs more than a
+#: graze.
+HEAD_GROUND_SENSOR = "head_ground_contact"
+HEAD_GROUND_CONTACT_WEIGHT = -3.0  # per step touching
+HEAD_GROUND_FORCE_WEIGHT = -0.2  # per step, per N above HEAD_GROUND_FREE_N
+HEAD_GROUND_FREE_N = 1.0
+
+
+def head_ground_contact(env, sensor_name: str = HEAD_GROUND_SENSOR) -> torch.Tensor:
+    """1 where the neck or head touches the terrain, else 0."""
+    found = microduck_mdp._sensor_any_contact(env, sensor_name)
+    if found is None:
+        return torch.zeros(env.num_envs, device=env.device)
+    return found.float()
+
+
+def make_head_off_ground(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
+    """Adds the head-ground sensor (the neck's subtree against the terrain) and its two costs."""
+    sensor = ContactSensorCfg(
+        name=HEAD_GROUND_SENSOR,
+        primary=ContactMatch(mode="subtree", pattern="neck", entity="robot"),
+        secondary=ContactMatch(mode="body", pattern="terrain"),
+        fields=("found", "force"),
+        reduce="netforce",
+        num_slots=1,
+    )
+    cfg.scene.sensors = tuple(s for s in cfg.scene.sensors if s.name != HEAD_GROUND_SENSOR) + (sensor,)
+    cfg.rewards["head_ground_contact"] = RewardTermCfg(
+        func=head_ground_contact,
+        weight=HEAD_GROUND_CONTACT_WEIGHT,
+        params={"sensor_name": HEAD_GROUND_SENSOR},
+    )
+    cfg.rewards["head_ground_force"] = RewardTermCfg(
+        func=microduck_mdp.body_impact_cost,
+        weight=HEAD_GROUND_FORCE_WEIGHT,
+        params={"sensor_name": HEAD_GROUND_SENSOR, "threshold": HEAD_GROUND_FREE_N},
+    )
     return cfg
 
 

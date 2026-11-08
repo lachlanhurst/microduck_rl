@@ -226,3 +226,20 @@ def test_onnx_expert_matches_onnxruntime():
         want = session.run(None, {"obs": x})[0]
         got = expert(TensorDict({"actor": torch.from_numpy(x)}, batch_size=[1])).numpy()
         assert np.allclose(got, want, atol=1e-5)
+
+
+def test_dukki_sitstand_keeps_head_off_ground():
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjlab_microduck.tasks import dukki
+
+    cfg = load_env_cfg("Mjlab-SitStand-Flat-Dukki")
+    sensor = next(s for s in cfg.scene.sensors if s.name == dukki.HEAD_GROUND_SENSOR)
+    assert sensor.primary.mode == "subtree" and sensor.primary.pattern == "neck"
+    assert cfg.rewards["head_ground_contact"].weight == dukki.HEAD_GROUND_CONTACT_WEIGHT < 0
+    assert cfg.rewards["head_ground_force"].weight == dukki.HEAD_GROUND_FORCE_WEIGHT < 0
+    assert "sample_still" in cfg.events  # still practice kept
+    # Pollen's microduck sit-stand is unchanged.
+    base = load_env_cfg("Mjlab-SitStand-Flat-MicroDuck")
+    assert "head_ground_contact" not in base.rewards
+    assert all(s.name != dukki.HEAD_GROUND_SENSOR for s in base.scene.sensors)
