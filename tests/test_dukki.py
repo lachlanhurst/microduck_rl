@@ -240,6 +240,8 @@ def test_dukki_sitstand_keeps_head_off_ground():
     assert cfg.rewards["head_ground_force"].weight == dukki.HEAD_GROUND_FORCE_WEIGHT < 0
     assert "sample_still" in cfg.events  # still practice kept
     assert cfg.rewards["sit_stall"].func is dukki.SitStall and cfg.rewards["sit_stall"].weight < 0
+    assert cfg.rewards["stand_stall"].params["posture"] == "stand" and cfg.rewards["stand_stall"].weight < 0
+    assert cfg.rewards["rise_speed_squared"].weight == dukki.SOFT_RISE_WEIGHT < 0
     # Pollen's microduck sit-stand is unchanged.
     base = load_env_cfg("Mjlab-SitStand-Flat-MicroDuck")
     assert "head_ground_contact" not in base.rewards and "sit_stall" not in base.rewards
@@ -274,3 +276,32 @@ def test_sit_stall_counts_from_the_sit_command():
     assert term(env).tolist() == [1.0, 0.0, 0.0]
     cmd[1, 0] = 1.0  # sit again: the grace period starts over
     assert term(env).tolist() == [1.0, 0.0, 0.0]
+
+
+def test_stand_stall_and_rise_speed_squared():
+    from types import SimpleNamespace
+
+    from mjlab_microduck.tasks import dukki
+
+    n, dt = 2, 0.02
+    cmd = torch.zeros(n, 3)  # both told to stand
+    z = torch.tensor([0.062, 0.115])  # robot 0 still seated, robot 1 standing
+    vz = torch.tensor([0.5, -0.3])
+    data = SimpleNamespace(
+        root_link_pos_w=torch.stack([torch.zeros(n), torch.zeros(n), z], 1),
+        root_link_lin_vel_w=torch.stack([torch.zeros(n), torch.zeros(n), vz], 1),
+    )
+    env = SimpleNamespace(
+        num_envs=n,
+        device="cpu",
+        step_dt=dt,
+        command_manager=SimpleNamespace(get_term=lambda name: SimpleNamespace(vel_command_b=cmd)),
+        scene={"robot": SimpleNamespace(data=data)},
+    )
+    term = dukki.SitStall(None, env)
+    for _ in range(int(dukki.SIT_STALL_GRACE_S / dt) + 2):
+        out = term(env, posture="stand")
+    assert out.tolist() == [1.0, 0.0]
+    rise = dukki.rise_speed_squared(env)
+    assert rise[0] == pytest.approx((0.5 - dukki.SOFT_RISE_MAX_VZ) ** 2)
+    assert rise[1] == 0.0

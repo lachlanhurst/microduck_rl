@@ -404,7 +404,9 @@ SIT_STALL_HEIGHT = 0.0875  # [m] halfway between SIT_Z 0.060 and STAND_Z 0.115
 
 
 class SitStall(ManagerTermBase):
-    """1 while a sit command is older than ``grace_s`` and the root is still above ``height``."""
+    """1 while a posture command is older than ``grace_s`` and the root is still on the wrong
+    side of ``height``: above it under a sit command (``posture="sit"``), below it under a
+    stand command (``posture="stand"``)."""
 
     def __init__(self, cfg, env):
         super().__init__(env)
@@ -421,18 +423,56 @@ class SitStall(ManagerTermBase):
         command_name: str = "twist",
         grace_s: float = SIT_STALL_GRACE_S,
         height: float = SIT_STALL_HEIGHT,
+        posture: str = "sit",
         asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     ) -> torch.Tensor:
         sit = env.command_manager.get_term(command_name).vel_command_b[:, 0] > 0.5
         self._age = torch.where(sit == self._sit, self._age + env.step_dt, torch.zeros_like(self._age))
         self._sit = sit
         z = env.scene[asset_cfg.name].data.root_link_pos_w[:, 2]
-        return (sit & (self._age > grace_s) & (z > height)).float()
+        if posture == "sit":
+            stalled = sit & (z > height)
+        else:
+            stalled = ~sit & (z < height)
+        return (stalled & (self._age > grace_s)).float()
 
 
 def make_no_sit_stall(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
     """Adds the sit-stall cost to a sit-stand cfg."""
     cfg.rewards["sit_stall"] = RewardTermCfg(func=SitStall, weight=SIT_STALL_WEIGHT, params={})
+    return cfg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sit-stand: a soft rise
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The low-noise sit-stand (model_4749, 08/11/2026) sits in about 1 s but stands
+#: up from seated in 0.15 s, the trunk peaking at 0.5 m/s, six times the task's
+#: 0.08 m/s rise cap. The cap's cost is linear in the excess speed, so it sums to
+#: about weight x distance (0.4 for the whole pop), and the slewed posture target
+#: hardly charges for arriving early. A cost on the SQUARE of the excess makes a
+#: pop expensive and a steady rise nearly free: at -500, a 0.5 m/s pop costs about
+#: 10, a rise over about 0.5 s about 1, one at the cap nothing. The stand-stall
+#: twin of the sit-stall cost keeps it from refusing to stand instead.
+SOFT_RISE_MAX_VZ = 0.08  # [m/s], the task's MAX_RISE_SPEED
+SOFT_RISE_WEIGHT = -500.0  # per second, per (m/s)^2 above SOFT_RISE_MAX_VZ
+
+
+def rise_speed_squared(env, max_vz: float = SOFT_RISE_MAX_VZ, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
+    """(upward root speed above ``max_vz``)^2 [(m/s)^2]; 0 at or below it and going down."""
+    vz = torch.nan_to_num(env.scene[asset_cfg.name].data.root_link_lin_vel_w[:, 2], nan=0.0)
+    return torch.clamp(vz - max_vz, min=0.0) ** 2
+
+
+def make_soft_rise(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
+    """Adds the squared rise-speed cost and the stand-stall cost to a sit-stand cfg."""
+    cfg.rewards["rise_speed_squared"] = RewardTermCfg(
+        func=rise_speed_squared, weight=SOFT_RISE_WEIGHT, params={"max_vz": SOFT_RISE_MAX_VZ}
+    )
+    cfg.rewards["stand_stall"] = RewardTermCfg(
+        func=SitStall, weight=SIT_STALL_WEIGHT, params={"posture": "stand"}
+    )
     return cfg
 
 

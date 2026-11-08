@@ -95,6 +95,8 @@ def main():
     first_reach = torch.full((n,), float("nan"), device=env.device)
     best_err = torch.full((n,), float("inf"), device=env.device)
     reach_times = defaultdict(list)  # case -> [s] for reached segments
+    peak_vz = torch.zeros(n, device=env.device)  # fastest |vertical speed| in the segment [m/s]
+    peak_vzs = defaultdict(list)
     fail_errs = defaultdict(list)  # case -> closest approach [mm] for missed segments
 
     def case_of(s, tall):
@@ -110,6 +112,7 @@ def main():
             peaks[c] = max(peaks[c], float(peak[i]))
             head_counts[c] += int(head_touched[i])
             head_peaks[c] = max(head_peaks[c], float(head_peak[i]))
+            peak_vzs[c].append(float(peak_vz[i]))
             if reached[i]:
                 reach_times[c].append(float(first_reach[i]))
             else:
@@ -144,6 +147,8 @@ def main():
             first_reach = torch.where(ended, torch.full_like(first_reach, float("nan")), first_reach)
             first_reach = torch.where(torch.isnan(first_reach) & (err < REACH_MM), since, first_reach)
             best_err = torch.where(ended, err, torch.minimum(best_err, err))
+            vz = robot.data.root_link_lin_vel_w[:, 2].abs()
+            peak_vz = torch.where(ended, vz, torch.maximum(peak_vz, vz))
             reached |= (since >= SETTLE_S) & (err < REACH_MM)
     close(torch.ones(n, dtype=torch.bool, device=env.device))
 
@@ -160,7 +165,9 @@ def main():
         if args.detail:
             rt, fe = torch.tensor(reach_times[c] or [float("nan")]), torch.tensor(fail_errs[c] or [float("nan")])
             print(f"      first within {REACH_MM:.0f} mm after median {rt.nanmedian():.2f} s, 90% {rt.nanquantile(0.9):.2f} s;"
-                  f"  missed: closest median {fe.nanmedian():.0f} mm, 10% {fe.nanquantile(0.1):.0f} mm, 90% {fe.nanquantile(0.9):.0f} mm")
+                  f"  missed: closest median {fe.nanmedian():.0f} mm, 10% {fe.nanquantile(0.1):.0f} mm, 90% {fe.nanquantile(0.9):.0f} mm;"
+                  f"  peak vertical speed median {torch.tensor(peak_vzs[c] or [float('nan')]).nanmedian():.2f} m/s,"
+                  f" 90% {torch.tensor(peak_vzs[c] or [float('nan')]).nanquantile(0.9):.2f} m/s")
     env.close()
 
 

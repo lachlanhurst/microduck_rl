@@ -283,7 +283,7 @@ for _task_id, _make_cfg, _kw, _rl_cfg, _robot_cfg in _BACKLASH_TASKS:
 # actuator, J288/6S/head-electronics masses, rotor-side joint obs. Ids mirror
 # the base ids with "-Dukki" in place of "-MicroDuck". Gains come from
 # DUKKI_KP / DUKKI_KD at import (gain sweeps), joint_vel from DUKKI_JOINT_VEL.
-from .dukki import make_dukki_standup_distill_rl_cfg, make_dukki_variant, make_head_off_ground, make_no_sit_stall, make_still_practice
+from .dukki import make_dukki_standup_distill_rl_cfg, make_dukki_variant, make_head_off_ground, make_no_sit_stall, make_soft_rise, make_still_practice
 from .j288_testbench_env_cfg import J288TestbenchRlCfg, make_j288_testbench_env_cfg
 
 # (task_id, make_fn, make_kwargs, rl_cfg, model, backlash). model is the MJCF
@@ -299,8 +299,10 @@ _DUKKI_TASKS = (
     ("Mjlab-SitStand-Flat-Dukki", make_microduck_sitstand_env_cfg, {}, MicroduckSitStandRlCfg, "standup", False),
 )
 # Sit-stand also gives a share of robots episodes with the head still and no pushes,
-# keeps the head off the ground and taxes standing on under a sit command (dukki.py).
-_DUKKI_EXTRAS = {"Mjlab-SitStand-Flat-Dukki": (make_still_practice, make_head_off_ground, make_no_sit_stall)}
+# keeps the head off the ground, taxes stalling in either posture and rises softly (dukki.py).
+_DUKKI_EXTRAS = {
+    "Mjlab-SitStand-Flat-Dukki": (make_still_practice, make_head_off_ground, make_no_sit_stall, make_soft_rise)
+}
 
 
 def _dukki_extras(task_id):
