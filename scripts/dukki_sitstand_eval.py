@@ -48,6 +48,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-pushes", action="store_true", help="as dukki_render: pushes and their curricula off")
     ap.add_argument("--head-zero", action="store_true", help="as dukki_render: head and body pose commands held at 0")
+    ap.add_argument("--stochastic", action="store_true", help="sample actions with the policy's training noise instead of its mean")
     ap.add_argument("--detail", action="store_true", help="also how soon each case first gets there, and how close the misses get")
     args = ap.parse_args()
 
@@ -120,7 +121,7 @@ def main():
                 for name in ("head_pose", "body_pose"):
                     if name in env.command_manager.active_terms:
                         env.command_manager.get_term(name)._command[:] = 0.0
-            obs, _, dones, _ = wrapped.step(policy(obs))
+            obs, _, dones, _ = wrapped.step(policy(obs, stochastic_output=True) if args.stochastic else policy(obs))
             now_sit = twist.vel_command_b[:, 0] > 0.5
             z = robot.data.root_link_pos_w[:, 2]
             ended = (now_sit != sit) | dones.bool()
@@ -146,7 +147,7 @@ def main():
             reached |= (since >= SETTLE_S) & (err < REACH_MM)
     close(torch.ones(n, dtype=torch.bool, device=env.device))
 
-    extras = [f for f, on in (("no pushes", args.no_pushes), ("head held at 0", args.head_zero)) if on]
+    extras = [f for f, on in (("no pushes", args.no_pushes), ("head held at 0", args.head_zero), ("sampled actions", args.stochastic)) if on]
     print(f"== {args.checkpoint} on {args.task}, {n} robots for {args.duration:.0f} s on {args.device}{', ' + ', '.join(extras) if extras else ''}")
     for c in ("sit from standing", "sit from seated", "stand from seated", "stand from standing"):
         ok, total = counts[c]
