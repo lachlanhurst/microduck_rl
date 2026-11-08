@@ -342,9 +342,15 @@ def make_still_practice(cfg: ManagerBasedRlEnvCfg, prob: float = STILL_PROB) -> 
 #: cost for every step the neck or head touches the terrain, and a cost on the
 #: contact force above HEAD_GROUND_FREE_N, so a hard smack costs more than a
 #: graze.
+#
+#: Rewards are rates (scaled by dt), so -20 costs 20 per second of contact. One
+#: head plant (about 0.3 s down, a 100 N impact over a few steps, ~10 N while
+#: propped) then costs about 13: well below a clean sit, still above refusing
+#: to sit (the sitting rewards are worth roughly 15 to 20 over a dwell). -3 and
+#: -0.2 cost about 2 and changed nothing.
 HEAD_GROUND_SENSOR = "head_ground_contact"
-HEAD_GROUND_CONTACT_WEIGHT = -3.0  # per step touching
-HEAD_GROUND_FORCE_WEIGHT = -0.2  # per step, per N above HEAD_GROUND_FREE_N
+HEAD_GROUND_CONTACT_WEIGHT = -20.0  # per second touching
+HEAD_GROUND_FORCE_WEIGHT = -1.0  # per second, per N above HEAD_GROUND_FREE_N
 HEAD_GROUND_FREE_N = 1.0
 
 
