@@ -396,3 +396,29 @@ def test_dukki_head_roll_commands_within_the_limit(task):
     assert stages[-1]["ranges"][i] == pytest.approx((-cap, cap))
     # The base task keeps its own (wider) final range.
     assert base_stages[-1]["ranges"][i][1] > cap
+    # The head_roll target is clipped at the stop, as the robot's safety layer clips it.
+    limit = np.radians(dk.HEAD_ROLL_LIMIT_DEG)
+    assert cfg.actions["joint_pos"].clip == {dk.HEAD_ROLL_JOINT: pytest.approx((-limit, limit))}
+    assert base.actions["joint_pos"].clip is None
+
+
+def test_head_roll_target_clipped_in_the_env():
+    """A head_roll action far past the stop reaches the actuator as the limit; other joints untouched."""
+    from mjlab.envs import ManagerBasedRlEnv
+    from mjlab.tasks.registry import load_env_cfg
+
+    cfg = load_env_cfg("Mjlab-Velocity-Flat-Dukki", play=True)
+    cfg.scene.num_envs = 2
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+        term = env.action_manager.get_term("joint_pos")
+        k = term.target_names.index(dk.HEAD_ROLL_JOINT)
+        raw = torch.zeros(2, term.action_dim)
+        raw[0, k], raw[1, k] = 100.0, -100.0
+        term.process_actions(raw)
+        limit = np.radians(dk.HEAD_ROLL_LIMIT_DEG)
+        assert term._processed_actions[:, k].tolist() == pytest.approx([limit, -limit])
+        others = [j for j in range(term.action_dim) if j != k]
+        torch.testing.assert_close(term._processed_actions[:, others], (raw * term._scale + term._offset)[:, others])
+    finally:
+        env.close()

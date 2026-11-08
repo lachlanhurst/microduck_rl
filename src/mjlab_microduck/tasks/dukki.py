@@ -32,9 +32,11 @@ The critic keeps the true joint velocity (privileged).
    perfectly rigid, and that would overheat the real servo in seconds). The
    allowance lets a joint press its stop with at most OVER_LIMIT_TORQUE.
 
-4. Head roll commands capped to ``HEAD_ROLL_COMMAND_SHARE`` of the head roll
-   limit (dukki_constants.HEAD_ROLL_LIMIT_DEG, ±15 degrees), so the head pose
-   command and its curriculum never ask for a tilt the joint cannot reach.
+4. The head roll limit (dukki_constants.HEAD_ROLL_LIMIT_DEG, ±15 degrees, a
+   physical stop that damage may follow past): the head_roll joint target is
+   clipped to it, as the firmware's safety layer clips it on the robot, so the
+   servo is never driven into the stop; and the head pose command and its
+   curriculum are capped to ``HEAD_ROLL_COMMAND_SHARE`` of it.
 
 Gain sweep. ``DUKKI_KP`` [N.m/rad] and ``DUKKI_KD`` [N.m.s/rad] set the gains
 of every joint (default dukki_constants.J288_KP / J288_KD). They are read when
@@ -63,6 +65,7 @@ from mjlab_microduck.actuator import J288DRActuator
 from mjlab_microduck.robot.dukki_constants import (
     J288_KD,
     J288_KP,
+    HEAD_ROLL_JOINT,
     head_roll_limit_rad,
     make_dukki_robot_cfg,
     make_j288_actuators,
@@ -93,16 +96,22 @@ def _cap_range(ranges, index: int, cap: float):
     return tuple(ranges)
 
 
-def limit_head_roll_commands(cfg: ManagerBasedRlEnvCfg, limit_rad: float | None = None) -> ManagerBasedRlEnvCfg:
-    """Cap the head roll in the head pose command and its range curriculum.
+def apply_head_roll_limit(cfg: ManagerBasedRlEnvCfg, limit_rad: float | None = None) -> ManagerBasedRlEnvCfg:
+    """Clip the head_roll target to ±``limit_rad`` and cap head roll commands.
 
-    The cap is ``HEAD_ROLL_COMMAND_SHARE`` of ``limit_rad`` (default the
-    dukki_constants head roll limit); nothing changes when there is no limit.
+    ``limit_rad`` defaults to the dukki_constants head roll limit; nothing
+    changes when there is no limit. The joint_pos action's head_roll target
+    (after scale and offset) is clipped to the limit, the robot's safety layer
+    doing the same. The head pose command and its range curriculum are capped
+    at ``HEAD_ROLL_COMMAND_SHARE`` of the limit.
     """
     if limit_rad is None:
         limit_rad = head_roll_limit_rad()
     if limit_rad is None:
         return cfg
+    action = cfg.actions.get("joint_pos")
+    if action is not None:
+        action.clip = {**(action.clip or {}), HEAD_ROLL_JOINT: (-limit_rad, limit_rad)}
     cap = HEAD_ROLL_COMMAND_SHARE * limit_rad
     command = cfg.commands.get("head_pose")
     if command is not None and len(command.ranges) > HEAD_ROLL_COMMAND_INDEX:
@@ -300,7 +309,7 @@ def make_dukki_variant(
             weight=OVER_LIMIT_WEIGHT,
             params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
         )
-    return limit_head_roll_commands(cfg)
+    return apply_head_roll_limit(cfg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
