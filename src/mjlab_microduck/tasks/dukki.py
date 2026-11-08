@@ -515,7 +515,12 @@ STAND_EXPERT_GATE_DEG = 20.0
 #: rise there: the sit-stand's squared rise- and descent-speed costs, applied only
 #: while the trunk is tilted less than STAND_EXPERT_GATE_DEG. The flips themselves
 #: (taught by the expert above the gate) are left alone.
+#: At the sit-stand's -500 the rise from sitting only fell from 0.55 to about
+#: 0.33 m/s (soft stand-up run, 3750 to 4500): the stand-up task has no slewed
+#: target, so arriving early pays more than in sit-stand. -2000 makes 0.33 m/s
+#: cost about what the 0.55 m/s pop did at -500.
 SOFT_STANDUP_TILT_DEG = STAND_EXPERT_GATE_DEG
+SOFT_STANDUP_WEIGHT = -2000.0  # per second, per (m/s)^2 above the cap, near upright
 
 
 def _tilt_deg(env, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
@@ -540,7 +545,7 @@ def vertical_speed_squared_upright(
 def make_soft_standup(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
     """Adds the near-upright squared vertical-speed cost to a stand-up cfg."""
     cfg.rewards["vertical_speed_squared_upright"] = RewardTermCfg(
-        func=vertical_speed_squared_upright, weight=SOFT_TRANSITION_WEIGHT, params={}
+        func=vertical_speed_squared_upright, weight=SOFT_STANDUP_WEIGHT, params={}
     )
     return cfg
 
