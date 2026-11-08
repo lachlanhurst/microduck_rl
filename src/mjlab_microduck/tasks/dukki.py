@@ -444,19 +444,22 @@ def make_no_sit_stall(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sit-stand: a soft rise
+# Sit-stand: soft transitions
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: The low-noise sit-stand (model_4749, 08/11/2026) sits in about 1 s but stands
-#: up from seated in 0.15 s, the trunk peaking at 0.5 m/s, six times the task's
-#: 0.08 m/s rise cap. The cap's cost is linear in the excess speed, so it sums to
-#: about weight x distance (0.4 for the whole pop), and the slewed posture target
-#: hardly charges for arriving early. A cost on the SQUARE of the excess makes a
-#: pop expensive and a steady rise nearly free: at -500, a 0.5 m/s pop costs about
-#: 10, a rise over about 0.5 s about 1, one at the cap nothing. The stand-stall
-#: twin of the sit-stall cost keeps it from refusing to stand instead.
-SOFT_RISE_MAX_VZ = 0.08  # [m/s], the task's MAX_RISE_SPEED
-SOFT_RISE_WEIGHT = -500.0  # per second, per (m/s)^2 above SOFT_RISE_MAX_VZ
+#: The low-noise sit-stand (model_4749, 08/11/2026) stands up from seated in
+#: 0.15 s, the trunk peaking at 0.5 m/s against the task's 0.08 m/s rise cap, and
+#: sits by crouching slowly to about 100 mm and then dropping the last 40 mm onto
+#: its seat in 0.1 to 0.2 s at up to 0.57 m/s (descent cap 0.05 m/s). Both caps
+#: cost the excess speed linearly, so a whole pop or drop sums to about weight x
+#: distance (0.4 for the rise), and the slewed posture target hardly charges for
+#: arriving early. A cost on the SQUARE of the excess makes a pop or a drop
+#: expensive and a steady transition nearly free: at -500, a 0.5 m/s pop costs
+#: about 10, a rise over about 0.5 s about 1, one at the cap nothing. The
+#: stand-stall twin of the sit-stall cost keeps it from refusing to stand instead.
+SOFT_RISE_MAX_VZ = 0.08  # [m/s] up, the task's MAX_RISE_SPEED
+SOFT_DESCENT_MAX_VZ = 0.05  # [m/s] down, the task's MAX_DESCENT_SPEED
+SOFT_TRANSITION_WEIGHT = -500.0  # per second, per (m/s)^2 above the cap
 
 
 def rise_speed_squared(env, max_vz: float = SOFT_RISE_MAX_VZ, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
@@ -465,10 +468,19 @@ def rise_speed_squared(env, max_vz: float = SOFT_RISE_MAX_VZ, asset_cfg: SceneEn
     return torch.clamp(vz - max_vz, min=0.0) ** 2
 
 
-def make_soft_rise(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
-    """Adds the squared rise-speed cost and the stand-stall cost to a sit-stand cfg."""
+def descent_speed_squared(env, max_vz: float = SOFT_DESCENT_MAX_VZ, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
+    """(downward root speed above ``max_vz``)^2 [(m/s)^2]; 0 at or below it and going up."""
+    vz = torch.nan_to_num(env.scene[asset_cfg.name].data.root_link_lin_vel_w[:, 2], nan=0.0)
+    return torch.clamp(-vz - max_vz, min=0.0) ** 2
+
+
+def make_soft_transitions(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
+    """Adds the squared rise- and descent-speed costs and the stand-stall cost to a sit-stand cfg."""
     cfg.rewards["rise_speed_squared"] = RewardTermCfg(
-        func=rise_speed_squared, weight=SOFT_RISE_WEIGHT, params={"max_vz": SOFT_RISE_MAX_VZ}
+        func=rise_speed_squared, weight=SOFT_TRANSITION_WEIGHT, params={"max_vz": SOFT_RISE_MAX_VZ}
+    )
+    cfg.rewards["descent_speed_squared"] = RewardTermCfg(
+        func=descent_speed_squared, weight=SOFT_TRANSITION_WEIGHT, params={"max_vz": SOFT_DESCENT_MAX_VZ}
     )
     cfg.rewards["stand_stall"] = RewardTermCfg(
         func=SitStall, weight=SIT_STALL_WEIGHT, params={"posture": "stand"}

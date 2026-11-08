@@ -241,7 +241,8 @@ def test_dukki_sitstand_keeps_head_off_ground():
     assert "sample_still" in cfg.events  # still practice kept
     assert cfg.rewards["sit_stall"].func is dukki.SitStall and cfg.rewards["sit_stall"].weight < 0
     assert cfg.rewards["stand_stall"].params["posture"] == "stand" and cfg.rewards["stand_stall"].weight < 0
-    assert cfg.rewards["rise_speed_squared"].weight == dukki.SOFT_RISE_WEIGHT < 0
+    assert cfg.rewards["rise_speed_squared"].weight == dukki.SOFT_TRANSITION_WEIGHT < 0
+    assert cfg.rewards["descent_speed_squared"].weight == dukki.SOFT_TRANSITION_WEIGHT
     # Pollen's microduck sit-stand is unchanged.
     base = load_env_cfg("Mjlab-SitStand-Flat-MicroDuck")
     assert "head_ground_contact" not in base.rewards and "sit_stall" not in base.rewards
@@ -278,7 +279,7 @@ def test_sit_stall_counts_from_the_sit_command():
     assert term(env).tolist() == [1.0, 0.0, 0.0]
 
 
-def test_stand_stall_and_rise_speed_squared():
+def test_stand_stall_and_vertical_speed_squared():
     from types import SimpleNamespace
 
     from mjlab_microduck.tasks import dukki
@@ -305,3 +306,6 @@ def test_stand_stall_and_rise_speed_squared():
     rise = dukki.rise_speed_squared(env)
     assert rise[0] == pytest.approx((0.5 - dukki.SOFT_RISE_MAX_VZ) ** 2)
     assert rise[1] == 0.0
+    drop = dukki.descent_speed_squared(env)
+    assert drop[0] == 0.0
+    assert drop[1] == pytest.approx((0.3 - dukki.SOFT_DESCENT_MAX_VZ) ** 2)
