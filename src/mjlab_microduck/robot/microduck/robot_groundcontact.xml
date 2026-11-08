@@ -406,57 +406,57 @@
     <mesh file="tof.stl"/>
     <mesh file="upper_leg_rigidity_plate_right.stl"/>
     <material name="right_shell_material" rgba="0.964706 0.964706 0.952941 1" specular="0.3" shininess="0.74"/>
-    <material name="trunk_base_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
+    <material name="trunk_base_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
     <material name="left_shell_material" rgba="0.964706 0.964706 0.952941 1" specular="0.3" shininess="0.74"/>
-    <material name="yaw2roll_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="bearing_roll_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="hip_l_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="upper_leg_left_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="upper_leg_rigidity_plate_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="leg_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="sole_left_material" rgba="0.152941 0.152941 0.152941 1" specular="0.3" shininess="0.45"/>
-    <material name="foot_left_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="neck_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="neck_pitch_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="yaw_roll_motion_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="face_part_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="motor_support_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
+    <material name="yaw2roll_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="bearing_roll_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="hip_l_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="upper_leg_left_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="upper_leg_rigidity_plate_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="leg_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="sole_left_material" rgba="0.32647 0.32647 0.32647 1" specular="0.3" shininess="0.45"/>
+    <material name="foot_left_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="neck_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="neck_pitch_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="yaw_roll_motion_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="face_part_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="motor_support_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
     <material name="top_head_shell_material" rgba="0.964706 0.964706 0.952941 1" specular="0.3" shininess="0.74"/>
-    <material name="noenoeil_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="jaw_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
+    <material name="noenoeil_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="jaw_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
     <material name="bottom_head_shell_material" rgba="0.964706 0.964706 0.952941 1" specular="0.3" shininess="0.74"/>
     <material name="speaker_material" rgba="0.247059 0.247059 0.247059 1" specular="0.3" shininess="0.74"/>
-    <material name="upper_leg_right_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="sole_right_material" rgba="0.152941 0.152941 0.152941 1" specular="0.3" shininess="0.45"/>
-    <material name="foot_right_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
-    <material name="battery_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
+    <material name="upper_leg_right_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="sole_right_material" rgba="0.32647 0.32647 0.32647 1" specular="0.3" shininess="0.45"/>
+    <material name="foot_right_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
+    <material name="battery_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
     <material name="bearing_61702_material" rgba="0.792157 0.819608 0.933333 1" specular="0.3" shininess="0.8"/>
     <material name="bearing_6700_material" rgba="0.792157 0.819608 0.933333 1" specular="0.3" shininess="0.8"/>
     <material name="bridge_1_material" rgba="0.313725 0.486275 0.411765 1" specular="0.3" shininess="0.8"/>
     <material name="bridge_2_material" rgba="0.627451 0.627451 0.627451 1" specular="0.8" shininess="0.74"/>
-    <material name="bridge_3_material" rgba="0.0980392 0.0980392 0.121569 1" specular="0.3" shininess="0.8"/>
+    <material name="bridge_3_material" rgba="0.29902 0.29902 0.310785 1" specular="0.3" shininess="0.8"/>
     <material name="bridge_4_material" rgba="0.85098 0.701961 0.2 1" specular="0.3" shininess="0.8"/>
     <material name="bridge_5_material" rgba="0.0509804 0.2 0.6 1" specular="0.3" shininess="0.8"/>
     <material name="bridge_6_material" rgba="0.94902 0.85098 0.0980392 1" specular="0.3" shininess="0.8"/>
-    <material name="bridge_mount_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
+    <material name="bridge_mount_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
     <material name="camera_1_material" rgba="0.266667 0.466667 0.4 1" specular="0.3" shininess="0.8"/>
-    <material name="camera_2_material" rgba="0.0980392 0.0980392 0.0980392 1" specular="0.3" shininess="0.88"/>
+    <material name="camera_2_material" rgba="0.29902 0.29902 0.29902 1" specular="0.3" shininess="0.88"/>
     <material name="camera_3_material" rgba="0.964706 0.964706 0.952941 1" specular="0.3" shininess="0.74"/>
-    <material name="fan_material" rgba="0.0980392 0.0980392 0.0980392 1" specular="0.3" shininess="0.8"/>
+    <material name="fan_material" rgba="0.29902 0.29902 0.29902 1" specular="0.3" shininess="0.8"/>
     <material name="head_compute_1_material" rgba="0.313725 0.486275 0.411765 1" specular="0.3" shininess="0.8"/>
-    <material name="head_compute_2_material" rgba="0.054902 0.054902 0.054902 1" specular="0.8" shininess="0.88"/>
+    <material name="head_compute_2_material" rgba="0.277451 0.277451 0.277451 1" specular="0.8" shininess="0.88"/>
     <material name="head_compute_3_material" rgba="0.0509804 0.34902 0.14902 1" specular="0.3" shininess="0.8"/>
     <material name="head_compute_4_material" rgba="0.627451 0.627451 0.627451 1" specular="0.8" shininess="0.74"/>
-    <material name="head_compute_5_material" rgba="0.2 0.2 0.2 1" specular="0.3" shininess="0.8"/>
+    <material name="head_compute_5_material" rgba="0.35 0.35 0.35 1" specular="0.3" shininess="0.8"/>
     <material name="head_compute_clamp_material" rgba="0.627451 0.627451 0.627451 1" specular="0.8" shininess="0.74"/>
     <material name="head_compute_front_clamp_material" rgba="0.627451 0.627451 0.627451 1" specular="0.8" shininess="0.74"/>
-    <material name="j288_material" rgba="0.0980392 0.0980392 0.0980392 1" specular="0.3" shininess="1"/>
+    <material name="j288_material" rgba="0.29902 0.29902 0.29902 1" specular="0.3" shininess="1"/>
     <material name="led_material" rgba="0.584314 0.129412 0.129412 1" specular="0.3" shininess="0.8"/>
     <material name="mic_material" rgba="0.266667 0.466667 0.4 1" specular="0.3" shininess="0.8"/>
     <material name="oled_material" rgba="0.101961 0.301961 0.184314 1" specular="0.3" shininess="0.74"/>
-    <material name="switch_material" rgba="0.0980392 0.0980392 0.0980392 1" specular="0.3" shininess="0.88"/>
+    <material name="switch_material" rgba="0.29902 0.29902 0.29902 1" specular="0.3" shininess="0.88"/>
     <material name="tof_material" rgba="0.623529 0.054902 0.054902 1" specular="0.3" shininess="0.74"/>
-    <material name="upper_leg_rigidity_plate_right_material" rgba="0.0862745 0.0862745 0.0862745 1" specular="0.3" shininess="0.74"/>
+    <material name="upper_leg_rigidity_plate_right_material" rgba="0.293137 0.293137 0.293137 1" specular="0.3" shininess="0.74"/>
   </asset>
   <actuator>
     <position class="chosen_actuator" name="left_hip_yaw" joint="left_hip_yaw"/>
