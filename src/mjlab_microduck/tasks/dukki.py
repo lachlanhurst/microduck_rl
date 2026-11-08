@@ -515,12 +515,13 @@ STAND_EXPERT_GATE_DEG = 20.0
 #: rise there: the sit-stand's squared rise- and descent-speed costs, applied only
 #: while the trunk is tilted less than STAND_EXPERT_GATE_DEG. The flips themselves
 #: (taught by the expert above the gate) are left alone.
-#: At the sit-stand's -500 the rise from sitting only fell from 0.55 to about
-#: 0.33 m/s (soft stand-up run, 3750 to 4500): the stand-up task has no slewed
-#: target, so arriving early pays more than in sit-stand. -2000 makes 0.33 m/s
-#: cost about what the 0.55 m/s pop did at -500.
+#: At -500 the rise from sitting fell from 0.55 to about 0.35 m/s and the time to
+#: upright from 0.14 to 0.26 s, recovery unchanged (soft stand-up run, model_4750,
+#: the deployed one). A follow-on at -2000 from 4750 plateaued at 0.33 m/s with more
+#: yaw spin, so -500 stays. The remaining peak is the lift-off from the seat; the
+#: rise stays under 20 degrees of tilt, so it is PPO's, not the expert's.
 SOFT_STANDUP_TILT_DEG = STAND_EXPERT_GATE_DEG
-SOFT_STANDUP_WEIGHT = -2000.0  # per second, per (m/s)^2 above the cap, near upright
+SOFT_STANDUP_WEIGHT = -500.0  # per second, per (m/s)^2 above the cap, near upright
 
 
 def _tilt_deg(env, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
