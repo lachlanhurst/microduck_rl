@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 
@@ -11,7 +12,7 @@ import mjlab_microduck.tasks  # noqa: F401
 from mjlab_microduck.robot import dukki_constants as dk
 from mjlab_microduck.robot import microduck_constants as mc
 
-DUKKI_SPECS = [
+CAD_SPECS = [
     mc.get_walk_spec,
     mc.get_standup_spec,
     mc.get_allcollisions_spec,
@@ -19,21 +20,51 @@ DUKKI_SPECS = [
     mc.get_backlash_spec,
     mc.get_allcollisions_backlash_spec,
 ]
+DUKKI_SPECS = [
+    dk.get_dukki_walk_spec,
+    dk.get_dukki_standup_spec,
+    dk.get_dukki_allcollisions_spec,
+    dk.get_dukki_walk_backlash_spec,
+    dk.get_dukki_backlash_spec,
+    dk.get_dukki_allcollisions_backlash_spec,
+]
+CAD_MASS = 1.0738  # the Fusion inertials, without cables and fasteners
 
 
-@pytest.mark.parametrize("spec_fn", DUKKI_SPECS)
-def test_dukki_mass_on_every_model(spec_fn):
-    """Every model carries the Fusion inertials: 1.074 kg, without cables and fasteners."""
-    model = spec_fn().compile()
-    assert model.body_mass.sum() == pytest.approx(1.0738, abs=0.001)
-    # Inertias stay physical (positive, triangle inequality).
-    inertia = model.body_inertia[1:]
-    assert (inertia > 0).all()
+def _physical(inertia):
+    """Inertias positive and meeting the triangle inequality."""
     s = inertia.sum(axis=1, keepdims=True)
-    assert (2 * inertia <= s + 1e-12).all()
+    return (inertia > 0).all() and (2 * inertia <= s + 1e-12).all()
 
 
-def test_dukki_models_use_the_shared_specs():
+@pytest.mark.parametrize("spec_fn", CAD_SPECS)
+def test_cad_mass_on_every_model(spec_fn):
+    """Every MJCF carries the Fusion inertials: 1.074 kg, without cables and fasteners."""
+    model = spec_fn().compile()
+    assert model.body_mass.sum() == pytest.approx(CAD_MASS, abs=0.001)
+    assert _physical(model.body_inertia[1:])
+
+
+@pytest.mark.parametrize("cad_fn, dukki_fn", list(zip(CAD_SPECS, DUKKI_SPECS)))
+def test_unmodelled_mass_spread_by_mass(cad_fn, dukki_fn):
+    """Cables and fasteners scale every body alike; no centre of mass moves."""
+    a, b = cad_fn().compile(), dukki_fn().compile()
+    k = 1.0 + dk.UNMODELLED_MASS / a.body_mass.sum()
+    assert b.body_mass.sum() == pytest.approx(CAD_MASS + dk.UNMODELLED_MASS, abs=0.001)
+    np.testing.assert_allclose(b.body_mass, a.body_mass * k, rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(b.body_inertia, a.body_inertia * k, rtol=1e-6, atol=1e-15)
+    np.testing.assert_allclose(b.body_ipos, a.body_ipos, atol=1e-12)
+    assert _physical(b.body_inertia[1:])
+
+
+def test_unmodelled_mass_reverts_at_zero():
+    cad = mc.get_walk_spec().compile()
+    model = dk.add_unmodelled_mass(mc.get_walk_spec(), mass=0.0).compile()
+    np.testing.assert_array_equal(model.body_mass, cad.body_mass)
+    np.testing.assert_array_equal(model.body_inertia, cad.body_inertia)
+
+
+def test_dukki_models_use_the_dukki_specs():
     for name, (spec_fn, _) in dk._DUKKI_MODELS.items():
         assert spec_fn in DUKKI_SPECS, name
 

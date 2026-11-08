@@ -5,7 +5,17 @@ Dukki itself: geometry from the Fusion model (J288 housings, 6S battery,
 bridge, head electronics) and every body's inertial from it too, the printed
 parts from their PA12 SLS / TPU materials and the bought parts weighed
 (microduck-unitree scripts/f360_to_mjcf, masses.json). The robot is 1.074 kg
-without cables and fasteners. This module adds the J288 actuator model.
+there, without cables and fasteners.
+
+This module adds two things the MJCFs do not have:
+
+* Cables and fasteners, ``UNMODELLED_MASS`` (an estimate, 100 g), spread
+  over every body in proportion to its mass by ``add_unmodelled_mass``, so
+  1.174 kg in all. Each body's mass and inertia scale by the same factor;
+  centres of mass, and so the robot's, do not move. Applied when the Dukki
+  robot cfgs load the MJCFs, not written into them: set ``UNMODELLED_MASS``
+  to 0 to go back to the CAD masses, and a rebuild from Fusion leaves it be.
+* The J288 actuator model.
 
 Actuators: ``J288DRActuatorCfg`` with the M6 fit from the bench
 (``bam/params/unitree_j288/m6.json`` in the bam fork). The reflected rotor
@@ -16,6 +26,8 @@ voltage range and command delay.
 
 from __future__ import annotations
 
+import mujoco
+import numpy as np
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
 from mjlab_microduck.actuator import J288DRActuatorCfg
@@ -30,6 +42,57 @@ from mjlab_microduck.robot.microduck_constants import (
     get_walk_backlash_spec,
     get_walk_spec,
 )
+
+# ── Unmodelled mass ──────────────────────────────────────────────────────────
+# Cables (servo daisy chains, battery and head leads) and fasteners, which the
+# Fusion model has none of. About 100 g, estimated 08/11/2026; replace with
+# the weighed robot minus the MJCF's 1.074 kg. 0.0 reverts to the CAD masses.
+UNMODELLED_MASS = 0.100  # [kg]
+
+
+def add_unmodelled_mass(spec: mujoco.MjSpec, mass: float | None = None) -> mujoco.MjSpec:
+    """Spread ``mass`` (default ``UNMODELLED_MASS``) over every body in proportion to its own mass.
+
+    Each body's mass and inertia (about its centre of mass) scale by
+    1 + mass / total, which is the same as uniformly denser parts: body
+    centres of mass and principal axes stay put.
+    """
+    if mass is None:
+        mass = UNMODELLED_MASS
+    if mass == 0.0:
+        return spec
+    total = float(spec.copy().compile().body_mass.sum())
+    k = 1.0 + mass / total
+    for body in spec.bodies:
+        if body.mass > 0.0:
+            body.mass *= k
+            body.inertia = np.asarray(body.inertia) * k
+            body.fullinertia = np.asarray(body.fullinertia) * k  # NaN when unset, stays NaN
+    return spec
+
+
+def get_dukki_walk_spec() -> mujoco.MjSpec:
+    return add_unmodelled_mass(get_walk_spec())
+
+
+def get_dukki_standup_spec() -> mujoco.MjSpec:
+    return add_unmodelled_mass(get_standup_spec())
+
+
+def get_dukki_allcollisions_spec() -> mujoco.MjSpec:
+    return add_unmodelled_mass(get_allcollisions_spec())
+
+
+def get_dukki_walk_backlash_spec() -> mujoco.MjSpec:
+    return add_unmodelled_mass(get_walk_backlash_spec())
+
+
+def get_dukki_backlash_spec() -> mujoco.MjSpec:
+    return add_unmodelled_mass(get_backlash_spec())
+
+
+def get_dukki_allcollisions_backlash_spec() -> mujoco.MjSpec:
+    return add_unmodelled_mass(get_allcollisions_backlash_spec())
 
 
 # ── J288 actuators ───────────────────────────────────────────────────────────
@@ -80,12 +143,12 @@ def make_j288_actuators(**overrides) -> J288DRActuatorCfg:
 
 # Model name -> (spec_fn, init state). Mirrors the microduck robot cfgs.
 _DUKKI_MODELS = {
-    "walk": (get_walk_spec, HOME_FRAME),
-    "standup": (get_standup_spec, HOME_FRAME),
-    "allcollisions": (get_allcollisions_spec, HOME_FRAME),
-    "walk_backlash": (get_walk_backlash_spec, BACKLASH_HOME_FRAME),
-    "backlash": (get_backlash_spec, BACKLASH_HOME_FRAME),
-    "allcollisions_backlash": (get_allcollisions_backlash_spec, BACKLASH_HOME_FRAME),
+    "walk": (get_dukki_walk_spec, HOME_FRAME),
+    "standup": (get_dukki_standup_spec, HOME_FRAME),
+    "allcollisions": (get_dukki_allcollisions_spec, HOME_FRAME),
+    "walk_backlash": (get_dukki_walk_backlash_spec, BACKLASH_HOME_FRAME),
+    "backlash": (get_dukki_backlash_spec, BACKLASH_HOME_FRAME),
+    "allcollisions_backlash": (get_dukki_allcollisions_backlash_spec, BACKLASH_HOME_FRAME),
 }
 
 

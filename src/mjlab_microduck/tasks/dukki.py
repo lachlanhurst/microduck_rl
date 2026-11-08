@@ -4,7 +4,7 @@
 (task ids ``Mjlab-<Task>-<Flat|Rough>[-Backlash]-Dukki``):
 
 1. Robot -> the Dukki robot cfg on the same MJCF (robot/dukki_constants.py):
-   J288 masses, 6S pack, head electronics, and the J288 BAM actuator with
+   Fusion inertials plus the cables and fasteners, and the J288 BAM actuator with
    per-joint kp/kd. The backlash twin uses the plain J288 actuator and keeps
    the joint obs rotor-side (``make_backlash_variant(...,
    encoder_through_backlash=False)``): the J288's position loop and its
