@@ -61,9 +61,10 @@ def main():
     ap.add_argument("--duration", type=float, default=6.0, help="[s]")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--stochastic", action="store_true", help="sample actions with the policy's training noise instead of its mean")
     args = ap.parse_args()
 
-    print(f"== {args.checkpoint} on {args.task}, {args.envs} robots per start, {args.duration:.0f} s, pushes off")
+    print(f"== {args.checkpoint} on {args.task}, {args.envs} robots per start, {args.duration:.0f} s, pushes off{', sampled actions' if args.stochastic else ''}")
     for start in STARTS:
         torch.manual_seed(args.seed)
         cfg, env = build(args.task, start, args.envs, args.duration, args.device)
@@ -88,7 +89,7 @@ def main():
         spin = torch.zeros(n, device=env.device)
         with torch.no_grad():
             for k in range(steps):
-                obs, *_ = wrapped.step(policy(obs))
+                obs, *_ = wrapped.step(policy(obs, stochastic_output=True) if args.stochastic else policy(obs))
                 z = robot.data.root_link_pos_w[:, 2] * 1000
                 g = robot.data.projected_gravity_b
                 tilt = torch.rad2deg(torch.arccos((-g[:, 2] / g.norm(dim=1)).clamp(-1, 1)))

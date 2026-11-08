@@ -116,8 +116,10 @@ def pin_commands(env, cmd):
             env.command_manager.get_term(name)._command[:] = 0.0
 
 
-def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
+def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed, stochastic=False):
     if ckpt.endswith(".onnx"):
+        if stochastic:
+            raise ValueError("--stochastic needs a .pt checkpoint (an ONNX policy has no noise)")
         policy = OnnxPolicy(ckpt)
     else:
         runner.load(ckpt, map_location=env.device)
@@ -142,7 +144,7 @@ def evaluate(env, wrapped, runner, cmd, ckpt, duration, settle, seed):
     with torch.no_grad():
         for k in range(steps):
             pin_commands(env, cmd)
-            action = policy(obs)
+            action = policy(obs, stochastic_output=True) if stochastic else policy(obs)
             obs, _, dones, extras = wrapped.step(action)
             if k < settle_steps:
                 prev_action = action.clone()
@@ -211,6 +213,7 @@ def main():
     ap.add_argument("--settle", type=float, default=2.0, help="ignored at the start [s]")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", help="write results here")
+    ap.add_argument("--stochastic", action="store_true", help="sample actions with the policy's training noise instead of its mean")
     ap.add_argument("--device", default="cpu", help="simulate on this device, e.g. cuda:0 as in training")
     args = ap.parse_args()
 
@@ -221,8 +224,8 @@ def main():
     results = {}
     for item in args.checkpoints:
         label, path = item.split("=", 1)
-        results[label] = evaluate(env, wrapped, runner, cmd, path, args.duration, args.settle, args.seed)
-        print(f"\n== {label} on {args.task}")
+        results[label] = evaluate(env, wrapped, runner, cmd, path, args.duration, args.settle, args.seed, args.stochastic)
+        print(f"\n== {label} on {args.task}{', sampled actions' if args.stochastic else ''}")
         print(f"  {'scenario':10s} {'net m/s':>8s} {'net r/s':>8s} {'lin err':>8s} {'yaw err':>8s} {'falls':>5s} {'peak tau':>9s} {'joint':>15s} {'rms max':>8s} {'clamp %':>8s} {'at clamp':>15s} {'d action':>9s} {'qd rms':>7s} {'peak qd':>8s} {'qd joint':>15s} {'>18.6 %':>8s}")
         for sc, r in results[label].items():
             print(
