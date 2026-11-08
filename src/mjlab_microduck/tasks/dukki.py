@@ -347,10 +347,15 @@ def make_still_practice(cfg: ManagerBasedRlEnvCfg, prob: float = STILL_PROB) -> 
 #: head plant (about 0.3 s down, a 100 N impact over a few steps, ~10 N while
 #: propped) then costs about 13: well below a clean sit, still above refusing
 #: to sit (the sitting rewards are worth roughly 15 to 20 over a dwell). -3 and
-#: -0.2 cost about 2 and changed nothing.
+#: -0.2 cost about 2 and changed nothing. Tripled after the soft-transition
+#: fine-tune (model_5500) learned to fold the neck right forward (neck_pitch
+#: -1.4 rad) at the bottom of the sit as a counterweight, grazing the head at
+#: about 15 N in 2 to 5% of sits: at -20 such a graze cost only about 5. The
+#: sit-stall cost now covers refusing to sit, so the margin below refusing is no
+#: longer needed.
 HEAD_GROUND_SENSOR = "head_ground_contact"
-HEAD_GROUND_CONTACT_WEIGHT = -20.0  # per second touching
-HEAD_GROUND_FORCE_WEIGHT = -1.0  # per second, per N above HEAD_GROUND_FREE_N
+HEAD_GROUND_CONTACT_WEIGHT = -60.0  # per second touching
+HEAD_GROUND_FORCE_WEIGHT = -3.0  # per second, per N above HEAD_GROUND_FREE_N
 HEAD_GROUND_FREE_N = 1.0
 
 
