@@ -309,3 +309,31 @@ def test_stand_stall_and_vertical_speed_squared():
     drop = dukki.descent_speed_squared(env)
     assert drop[0] == 0.0
     assert drop[1] == pytest.approx((0.3 - dukki.SOFT_DESCENT_MAX_VZ) ** 2)
+
+
+def test_dukki_standup_distill_has_soft_upright_rise():
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjlab_microduck.tasks import dukki
+
+    cfg = load_env_cfg("Mjlab-StandUp-Flat-Dukki-Distill")
+    term = cfg.rewards["vertical_speed_squared_upright"]
+    assert term.func is dukki.vertical_speed_squared_upright and term.weight < 0
+    assert "vertical_speed_squared_upright" not in load_env_cfg("Mjlab-StandUp-Flat-MicroDuck").rewards
+
+
+def test_vertical_speed_squared_upright_gated_by_tilt():
+    import math
+    from types import SimpleNamespace
+
+    from mjlab_microduck.tasks import dukki
+
+    tilt = math.radians(40.0)
+    g = torch.tensor([[0.0, 0.0, -1.0], [math.sin(tilt), 0.0, -math.cos(tilt)], [0.0, 0.0, -1.0]])
+    vz = torch.tensor([0.5, 0.5, -0.4])
+    data = SimpleNamespace(projected_gravity_b=g, root_link_lin_vel_w=torch.stack([torch.zeros(3), torch.zeros(3), vz], 1))
+    env = SimpleNamespace(scene={"robot": SimpleNamespace(data=data)})
+    out = dukki.vertical_speed_squared_upright(env)
+    assert out[0] == pytest.approx((0.5 - dukki.SOFT_RISE_MAX_VZ) ** 2)
+    assert out[1] == 0.0  # tilted past the gate: the expert's part, left alone
+    assert out[2] == pytest.approx((0.4 - dukki.SOFT_DESCENT_MAX_VZ) ** 2)

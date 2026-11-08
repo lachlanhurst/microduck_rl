@@ -283,7 +283,7 @@ for _task_id, _make_cfg, _kw, _rl_cfg, _robot_cfg in _BACKLASH_TASKS:
 # actuator, J288/6S/head-electronics masses, rotor-side joint obs. Ids mirror
 # the base ids with "-Dukki" in place of "-MicroDuck". Gains come from
 # DUKKI_KP / DUKKI_KD at import (gain sweeps), joint_vel from DUKKI_JOINT_VEL.
-from .dukki import make_dukki_standup_distill_rl_cfg, make_dukki_variant, make_head_off_ground, make_no_sit_stall, make_soft_transitions, make_still_practice
+from .dukki import make_dukki_standup_distill_rl_cfg, make_dukki_variant, make_head_off_ground, make_no_sit_stall, make_soft_standup, make_soft_transitions, make_still_practice
 from .j288_testbench_env_cfg import J288TestbenchRlCfg, make_j288_testbench_env_cfg
 
 # (task_id, make_fn, make_kwargs, rl_cfg, model, backlash). model is the MJCF
@@ -338,8 +338,8 @@ register_mjlab_task(
 # Dukki stand-up with Pollen's stand expert as a teacher on tilted frames (dukki.py).
 register_mjlab_task(
     task_id="Mjlab-StandUp-Flat-Dukki-Distill",
-    env_cfg=make_dukki_variant(make_microduck_standup_env_cfg(), model="standup"),
-    play_env_cfg=make_dukki_variant(make_microduck_standup_env_cfg(play=True), model="standup"),
+    env_cfg=make_soft_standup(make_dukki_variant(make_microduck_standup_env_cfg(), model="standup")),
+    play_env_cfg=make_soft_standup(make_dukki_variant(make_microduck_standup_env_cfg(play=True), model="standup")),
     rl_cfg=make_dukki_standup_distill_rl_cfg(MicroduckStandUpRlCfg),
     runner_cls=MicroduckOnPolicyRunner,
 )

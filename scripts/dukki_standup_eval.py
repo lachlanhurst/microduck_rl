@@ -10,6 +10,7 @@ for --duration seconds with no resets, and every robot is judged:
     stays up   upright for the whole last second
     at limit   time with any joint's motor torque within 5% of the 1.0 N.m clamp
     spin       fastest yaw rate
+    rise       fastest upward trunk speed while upright-ish (tilted under UPRIGHT_DEG)
 
     DUKKI_KP=1 DUKKI_KD=0.05 uv run scripts/dukki_standup_eval.py \\
         --task Mjlab-StandUp-Flat-Dukki-Distill --checkpoint path/model_3999.pt
@@ -87,6 +88,7 @@ def main():
         up_at_end = torch.ones(n, dtype=torch.bool, device=env.device)
         at_limit = torch.zeros(n, device=env.device)
         spin = torch.zeros(n, device=env.device)
+        rise = torch.zeros(n, device=env.device)
         with torch.no_grad():
             for k in range(steps):
                 obs, *_ = wrapped.step(policy(obs, stochastic_output=True) if args.stochastic else policy(obs))
@@ -99,6 +101,8 @@ def main():
                     up_at_end &= up
                 at_limit += (act.reported_torque.abs().amax(dim=1) > 0.95).float() * dt
                 spin = torch.maximum(spin, robot.data.root_link_ang_vel_b[:, 2].abs())
+                vz = robot.data.root_link_lin_vel_w[:, 2]
+                rise = torch.maximum(rise, torch.where(tilt < UPRIGHT_DEG, vz, torch.zeros_like(vz)))
         got = ~first_up.isnan()
         t = first_up[got]
         q = lambda p: float(t.quantile(p)) if t.numel() else float("nan")  # noqa: E731
@@ -108,6 +112,7 @@ def main():
             f"  time to upright median {q(0.5):.2f} s, 90% {q(0.9):.2f} s"
             f"  at limit median {float(at_limit.median()):.2f} s, 90% {float(at_limit.quantile(0.9)):.2f} s"
             f"  spin median {float(spin.median()):.1f}, 90% {float(spin.quantile(0.9)):.1f} rad/s"
+            f"  rise median {float(rise.median()):.2f}, 90% {float(rise.quantile(0.9)):.2f} m/s"
         )
         env.close()
 

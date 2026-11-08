@@ -505,6 +505,41 @@ STAND_EXPERT_DEFAULT = "logs/hf/microduck-policies/alpha_stand.onnx"
 STAND_EXPERT_GATE_DEG = 20.0
 
 
+#: Soft stand-up (08/11/2026): the distilled stand-up (model_3500) gets up from
+#: sitting in 0.14 s. Near upright the expert does not teach, so PPO alone sets the
+#: rise there: the sit-stand's squared rise- and descent-speed costs, applied only
+#: while the trunk is tilted less than STAND_EXPERT_GATE_DEG. The flips themselves
+#: (taught by the expert above the gate) are left alone.
+SOFT_STANDUP_TILT_DEG = STAND_EXPERT_GATE_DEG
+
+
+def _tilt_deg(env, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
+    g = env.scene[asset_cfg.name].data.projected_gravity_b
+    return torch.rad2deg(torch.arccos((-g[:, 2] / g.norm(dim=1)).clamp(-1.0, 1.0)))
+
+
+def vertical_speed_squared_upright(
+    env,
+    max_up: float = SOFT_RISE_MAX_VZ,
+    max_down: float = SOFT_DESCENT_MAX_VZ,
+    tilt_deg: float = SOFT_STANDUP_TILT_DEG,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Squared vertical speed beyond ``max_up`` rising or ``max_down`` falling, only while the
+    trunk is tilted less than ``tilt_deg`` [(m/s)^2]."""
+    vz = torch.nan_to_num(env.scene[asset_cfg.name].data.root_link_lin_vel_w[:, 2], nan=0.0)
+    excess = torch.clamp(vz - max_up, min=0.0) + torch.clamp(-vz - max_down, min=0.0)
+    return excess**2 * (_tilt_deg(env, asset_cfg) < tilt_deg).float()
+
+
+def make_soft_standup(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
+    """Adds the near-upright squared vertical-speed cost to a stand-up cfg."""
+    cfg.rewards["vertical_speed_squared_upright"] = RewardTermCfg(
+        func=vertical_speed_squared_upright, weight=SOFT_TRANSITION_WEIGHT, params={}
+    )
+    return cfg
+
+
 def make_dukki_standup_distill_rl_cfg(base):
     """``base`` (the stand-up runner cfg) with PPO plus behaviour cloning from the stand
     expert on tilted frames: no walk anchor. The expert path is ``DUKKI_STAND_EXPERT``."""
