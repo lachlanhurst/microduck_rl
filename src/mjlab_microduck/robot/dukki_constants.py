@@ -7,7 +7,7 @@ parts from their PA12 SLS / TPU materials and the bought parts weighed
 (microduck-unitree scripts/f360_to_mjcf, masses.json). The robot is 1.074 kg
 there, without cables and fasteners.
 
-This module adds two things the MJCFs do not have:
+This module adds three things the MJCFs do not have:
 
 * Cables and fasteners, ``UNMODELLED_MASS`` (an estimate, 100 g), spread
   over every body in proportion to its mass by ``add_unmodelled_mass``, so
@@ -15,6 +15,10 @@ This module adds two things the MJCFs do not have:
   centres of mass, and so the robot's, do not move. Applied when the Dukki
   robot cfgs load the MJCFs, not written into them: set ``UNMODELLED_MASS``
   to 0 to go back to the CAD masses, and a rebuild from Fusion leaves it be.
+* A tighter head roll (left to right tilt) range, ``HEAD_ROLL_LIMIT_DEG``
+  (15 degrees either way, a design constraint from 09/11/2026; the MJCF has
+  25), set by ``limit_head_roll`` the same way: ``None`` goes back to the
+  MJCF's range.
 * The J288 actuator model.
 
 Actuators: ``J288DRActuatorCfg`` with the M6 fit from the bench
@@ -71,28 +75,61 @@ def add_unmodelled_mass(spec: mujoco.MjSpec, mass: float | None = None) -> mujoc
     return spec
 
 
+# ── Head roll limit ──────────────────────────────────────────────────────────
+# Left to right head tilt, cut from the MJCF's ±25 degrees for a design
+# constraint (09/11/2026). None keeps the MJCF's range.
+HEAD_ROLL_LIMIT_DEG: float | None = 15.0
+HEAD_ROLL_JOINT = "head_roll"
+
+
+def head_roll_limit_rad(limit_deg: float | None = None) -> float | None:
+    """``limit_deg`` (default ``HEAD_ROLL_LIMIT_DEG``) in radians, or None when unlimited."""
+    if limit_deg is None:
+        limit_deg = HEAD_ROLL_LIMIT_DEG
+    return None if limit_deg is None else float(np.radians(limit_deg))
+
+
+def limit_head_roll(spec: mujoco.MjSpec, limit_deg: float | None = None) -> mujoco.MjSpec:
+    """Narrow the head_roll joint to ±``limit_deg`` (default ``HEAD_ROLL_LIMIT_DEG``).
+
+    Only narrows: a limit wider than the MJCF's leaves it as it is.
+    """
+    limit = head_roll_limit_rad(limit_deg)
+    if limit is None:
+        return spec
+    joint = spec.joint(HEAD_ROLL_JOINT)
+    lo, hi = joint.range
+    joint.range = [max(lo, -limit), min(hi, limit)]
+    return spec
+
+
+def dukki_spec(spec: mujoco.MjSpec) -> mujoco.MjSpec:
+    """The Dukki changes to a loaded MJCF: unmodelled mass and the head roll limit."""
+    return limit_head_roll(add_unmodelled_mass(spec))
+
+
 def get_dukki_walk_spec() -> mujoco.MjSpec:
-    return add_unmodelled_mass(get_walk_spec())
+    return dukki_spec(get_walk_spec())
 
 
 def get_dukki_standup_spec() -> mujoco.MjSpec:
-    return add_unmodelled_mass(get_standup_spec())
+    return dukki_spec(get_standup_spec())
 
 
 def get_dukki_allcollisions_spec() -> mujoco.MjSpec:
-    return add_unmodelled_mass(get_allcollisions_spec())
+    return dukki_spec(get_allcollisions_spec())
 
 
 def get_dukki_walk_backlash_spec() -> mujoco.MjSpec:
-    return add_unmodelled_mass(get_walk_backlash_spec())
+    return dukki_spec(get_walk_backlash_spec())
 
 
 def get_dukki_backlash_spec() -> mujoco.MjSpec:
-    return add_unmodelled_mass(get_backlash_spec())
+    return dukki_spec(get_backlash_spec())
 
 
 def get_dukki_allcollisions_backlash_spec() -> mujoco.MjSpec:
-    return add_unmodelled_mass(get_allcollisions_backlash_spec())
+    return dukki_spec(get_allcollisions_backlash_spec())
 
 
 # ── J288 actuators ───────────────────────────────────────────────────────────

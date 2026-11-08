@@ -32,6 +32,10 @@ The critic keeps the true joint velocity (privileged).
    perfectly rigid, and that would overheat the real servo in seconds). The
    allowance lets a joint press its stop with at most OVER_LIMIT_TORQUE.
 
+4. Head roll commands capped to ``HEAD_ROLL_COMMAND_SHARE`` of the head roll
+   limit (dukki_constants.HEAD_ROLL_LIMIT_DEG, ±15 degrees), so the head pose
+   command and its curriculum never ask for a tilt the joint cannot reach.
+
 Gain sweep. ``DUKKI_KP`` [N.m/rad] and ``DUKKI_KD`` [N.m.s/rad] set the gains
 of every joint (default dukki_constants.J288_KP / J288_KD). They are read when
 the tasks are registered, so set them on the command line:
@@ -59,6 +63,7 @@ from mjlab_microduck.actuator import J288DRActuator
 from mjlab_microduck.robot.dukki_constants import (
     J288_KD,
     J288_KP,
+    head_roll_limit_rad,
     make_dukki_robot_cfg,
     make_j288_actuators,
 )
@@ -73,6 +78,42 @@ OVER_LIMIT_TORQUE = 0.2
 OVER_LIMIT_WEIGHT = -1.0
 
 JOINT_VEL_SOURCES = ("position_difference", "reported_speed")
+
+#: Head roll commands stay within this share of the head roll limit: the margin
+#: the base curriculum keeps from the joint limits.
+HEAD_ROLL_COMMAND_SHARE = 0.9
+#: head_roll's place in the head pose command [neck_pitch, head_pitch, head_yaw, head_roll].
+HEAD_ROLL_COMMAND_INDEX = 3
+
+
+def _cap_range(ranges, index: int, cap: float):
+    ranges = list(ranges)
+    lo, hi = ranges[index]
+    ranges[index] = (max(lo, -cap), min(hi, cap))
+    return tuple(ranges)
+
+
+def limit_head_roll_commands(cfg: ManagerBasedRlEnvCfg, limit_rad: float | None = None) -> ManagerBasedRlEnvCfg:
+    """Cap the head roll in the head pose command and its range curriculum.
+
+    The cap is ``HEAD_ROLL_COMMAND_SHARE`` of ``limit_rad`` (default the
+    dukki_constants head roll limit); nothing changes when there is no limit.
+    """
+    if limit_rad is None:
+        limit_rad = head_roll_limit_rad()
+    if limit_rad is None:
+        return cfg
+    cap = HEAD_ROLL_COMMAND_SHARE * limit_rad
+    command = cfg.commands.get("head_pose")
+    if command is not None and len(command.ranges) > HEAD_ROLL_COMMAND_INDEX:
+        command.ranges = _cap_range(command.ranges, HEAD_ROLL_COMMAND_INDEX, cap)
+    curriculum = cfg.curriculum.get("head_pose_range")
+    if curriculum is not None:
+        stages = deepcopy(curriculum.params["range_stages"])
+        for stage in stages:
+            stage["ranges"] = _cap_range(stage["ranges"], HEAD_ROLL_COMMAND_INDEX, cap)
+        curriculum.params = {**curriculum.params, "range_stages": stages}
+    return cfg
 
 
 def dukki_gains_from_env() -> tuple[float, float]:
@@ -259,7 +300,7 @@ def make_dukki_variant(
             weight=OVER_LIMIT_WEIGHT,
             params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
         )
-    return cfg
+    return limit_head_roll_commands(cfg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

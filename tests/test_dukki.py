@@ -69,6 +69,32 @@ def test_dukki_models_use_the_dukki_specs():
         assert spec_fn in DUKKI_SPECS, name
 
 
+@pytest.mark.parametrize("cad_fn, dukki_fn", list(zip(CAD_SPECS, DUKKI_SPECS)))
+def test_head_roll_limited_on_every_dukki_model(cad_fn, dukki_fn):
+    """head_roll narrowed to ±HEAD_ROLL_LIMIT_DEG; every other joint as the MJCF has it."""
+    a, b = cad_fn().compile(), dukki_fn().compile()
+    j = b.joint(dk.HEAD_ROLL_JOINT).id
+    limit = np.radians(dk.HEAD_ROLL_LIMIT_DEG)
+    np.testing.assert_allclose(b.jnt_range[j], [-limit, limit], atol=1e-12)
+    assert a.jnt_range[j][1] > limit  # the MJCF's own range is wider (±25 degrees)
+    others = np.arange(b.njnt) != j
+    np.testing.assert_array_equal(b.jnt_range[others], a.jnt_range[others])
+
+
+def test_head_roll_limit_reverts_at_none(monkeypatch):
+    monkeypatch.setattr(dk, "HEAD_ROLL_LIMIT_DEG", None)
+    cad = mc.get_walk_spec().compile()
+    model = dk.limit_head_roll(mc.get_walk_spec()).compile()
+    np.testing.assert_array_equal(model.jnt_range, cad.jnt_range)
+    assert dk.head_roll_limit_rad() is None
+
+
+def test_head_roll_limit_only_narrows():
+    cad = mc.get_walk_spec().compile()
+    model = dk.limit_head_roll(mc.get_walk_spec(), limit_deg=40.0).compile()
+    np.testing.assert_array_equal(model.jnt_range, cad.jnt_range)
+
+
 def _bench_env(**kw):
     from mjlab.envs import ManagerBasedRlEnv
 
@@ -337,3 +363,36 @@ def test_vertical_speed_squared_upright_gated_by_tilt():
     assert out[0] == pytest.approx((0.5 - dukki.SOFT_RISE_MAX_VZ) ** 2)
     assert out[1] == 0.0  # tilted past the gate: the expert's part, left alone
     assert out[2] == pytest.approx((0.4 - dukki.SOFT_DESCENT_MAX_VZ) ** 2)
+
+
+HEAD_POSE_TASKS = [
+    "Mjlab-Velocity-Flat-Dukki",
+    "Mjlab-SitStand-Flat-Dukki",
+    "Mjlab-StandUp-Flat-Dukki",
+    "Mjlab-StandUp-Flat-Dukki-Distill",
+]
+
+
+@pytest.mark.parametrize("task", HEAD_POSE_TASKS)
+def test_dukki_head_roll_commands_within_the_limit(task):
+    """Head pose command and curriculum never ask head_roll past 90% of its limit."""
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjlab_microduck.tasks import dukki
+
+    base = load_env_cfg(task.replace("-Dukki", "-MicroDuck").replace("-Distill", ""))
+    cfg = load_env_cfg(task)
+    i = dukki.HEAD_ROLL_COMMAND_INDEX
+    cap = dukki.HEAD_ROLL_COMMAND_SHARE * np.radians(dk.HEAD_ROLL_LIMIT_DEG)
+    cmd, base_cmd = cfg.commands["head_pose"].ranges, base.commands["head_pose"].ranges
+    assert -cap - 1e-12 <= cmd[i][0] and cmd[i][1] <= cap + 1e-12
+    assert [r for k, r in enumerate(cmd) if k != i] == [r for k, r in enumerate(base_cmd) if k != i]
+    stages = cfg.curriculum["head_pose_range"].params["range_stages"]
+    base_stages = base.curriculum["head_pose_range"].params["range_stages"]
+    for stage, base_stage in zip(stages, base_stages, strict=True):
+        lo, hi = stage["ranges"][i]
+        assert -cap - 1e-12 <= lo and hi <= cap + 1e-12
+        assert stage["step"] == base_stage["step"]
+    assert stages[-1]["ranges"][i] == pytest.approx((-cap, cap))
+    # The base task keeps its own (wider) final range.
+    assert base_stages[-1]["ranges"][i][1] > cap
