@@ -239,7 +239,38 @@ def test_dukki_sitstand_keeps_head_off_ground():
     assert cfg.rewards["head_ground_contact"].weight == dukki.HEAD_GROUND_CONTACT_WEIGHT < 0
     assert cfg.rewards["head_ground_force"].weight == dukki.HEAD_GROUND_FORCE_WEIGHT < 0
     assert "sample_still" in cfg.events  # still practice kept
+    assert cfg.rewards["sit_stall"].func is dukki.SitStall and cfg.rewards["sit_stall"].weight < 0
     # Pollen's microduck sit-stand is unchanged.
     base = load_env_cfg("Mjlab-SitStand-Flat-MicroDuck")
-    assert "head_ground_contact" not in base.rewards
+    assert "head_ground_contact" not in base.rewards and "sit_stall" not in base.rewards
     assert all(s.name != dukki.HEAD_GROUND_SENSOR for s in base.scene.sensors)
+
+
+def test_sit_stall_counts_from_the_sit_command():
+    from types import SimpleNamespace
+
+    from mjlab_microduck.tasks import dukki
+
+    n, dt = 3, 0.02
+    cmd = torch.zeros(n, 3)
+    z = torch.tensor([0.115, 0.115, 0.062])
+    env = SimpleNamespace(
+        num_envs=n,
+        device="cpu",
+        step_dt=dt,
+        command_manager=SimpleNamespace(get_term=lambda name: SimpleNamespace(vel_command_b=cmd)),
+        scene={"robot": SimpleNamespace(data=SimpleNamespace(root_link_pos_w=torch.stack([torch.zeros(n), torch.zeros(n), z], 1)))},
+    )
+    term = dukki.SitStall(None, env)
+    cmd[:2, 0] = 1.0  # robots 0 and 1 told to sit, robot 2 seated and told to sit too
+    cmd[2, 0] = 1.0
+    steps = int(dukki.SIT_STALL_GRACE_S / dt)
+    for _ in range(steps):
+        assert term(env).sum() == 0  # within the grace period
+    term(env)  # age reaches the grace period exactly; the cost starts past it
+    out = term(env)
+    assert out.tolist() == [1.0, 1.0, 0.0]  # still standing after it; the seated one is fine
+    cmd[1, 0] = 0.0  # robot 1 told to stand: no cost
+    assert term(env).tolist() == [1.0, 0.0, 0.0]
+    cmd[1, 0] = 1.0  # sit again: the grace period starts over
+    assert term(env).tolist() == [1.0, 0.0, 0.0]

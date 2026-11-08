@@ -48,6 +48,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-pushes", action="store_true", help="as dukki_render: pushes and their curricula off")
     ap.add_argument("--head-zero", action="store_true", help="as dukki_render: head and body pose commands held at 0")
+    ap.add_argument("--detail", action="store_true", help="also how soon each case first gets there, and how close the misses get")
     args = ap.parse_args()
 
     cfg = load_env_cfg(args.task)
@@ -89,6 +90,11 @@ def main():
     peaks = defaultdict(float)
     head_counts = defaultdict(int)  # case -> segments with head-ground contact
     head_peaks = defaultdict(float)
+    # When each segment first came within REACH_MM of its target, and how close it got.
+    first_reach = torch.full((n,), float("nan"), device=env.device)
+    best_err = torch.full((n,), float("inf"), device=env.device)
+    reach_times = defaultdict(list)  # case -> [s] for reached segments
+    fail_errs = defaultdict(list)  # case -> closest approach [mm] for missed segments
 
     def case_of(s, tall):
         return ("sit" if s else "stand") + (" from standing" if tall else " from seated")
@@ -103,6 +109,10 @@ def main():
             peaks[c] = max(peaks[c], float(peak[i]))
             head_counts[c] += int(head_touched[i])
             head_peaks[c] = max(head_peaks[c], float(head_peak[i]))
+            if reached[i]:
+                reach_times[c].append(float(first_reach[i]))
+            else:
+                fail_errs[c].append(float(best_err[i]))
 
     with torch.no_grad():
         for _ in range(int(args.duration / dt)):
@@ -129,7 +139,11 @@ def main():
                 head_touched = torch.where(ended, touch, head_touched | touch)
                 head_peak = torch.where(ended, force, torch.maximum(head_peak, force))
             target = torch.where(sit, torch.full_like(z, SIT_Z), torch.full_like(z, STAND_Z))
-            reached |= (since >= SETTLE_S) & ((z - target).abs() * 1000 < REACH_MM)
+            err = (z - target).abs() * 1000
+            first_reach = torch.where(ended, torch.full_like(first_reach, float("nan")), first_reach)
+            first_reach = torch.where(torch.isnan(first_reach) & (err < REACH_MM), since, first_reach)
+            best_err = torch.where(ended, err, torch.minimum(best_err, err))
+            reached |= (since >= SETTLE_S) & (err < REACH_MM)
     close(torch.ones(n, dtype=torch.bool, device=env.device))
 
     extras = [f for f, on in (("no pushes", args.no_pushes), ("head held at 0", args.head_zero)) if on]
@@ -142,6 +156,10 @@ def main():
             head_share = 100 * head_counts[c] / total if total else float("nan")
             line += f"  head touched {head_share:5.1f}%  peak head force {head_peaks[c]:5.1f} N"
         print(line)
+        if args.detail:
+            rt, fe = torch.tensor(reach_times[c] or [float("nan")]), torch.tensor(fail_errs[c] or [float("nan")])
+            print(f"      first within {REACH_MM:.0f} mm after median {rt.nanmedian():.2f} s, 90% {rt.nanquantile(0.9):.2f} s;"
+                  f"  missed: closest median {fe.nanmedian():.0f} mm, 10% {fe.nanquantile(0.1):.0f} mm, 90% {fe.nanquantile(0.9):.0f} mm")
     env.close()
 
 

@@ -387,6 +387,56 @@ def make_head_off_ground(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Sit-stand: no stalling on a sit command
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: With the head kept off the ground, the fine-tune from 3250 (08/11/2026) sat
+#: without the head by 3500 but then drifted into refusing: by 3750 two thirds
+#: of sits from standing never left standing. Per second of a sit segment,
+#: standing on collected 7.8 (1.5 of it upright_while_tall, which pays for
+#: being upright and tall whatever the command), sitting 11.2, the transition
+#: being the dip in between. Staying above the halfway height once the posture
+#: target's 2 s ramp has run (plus 0.5 s) under a sit command now costs
+#: SIT_STALL_WEIGHT per second, so refusing nets about 5 against 11.
+SIT_STALL_WEIGHT = -5.0
+SIT_STALL_GRACE_S = 2.5
+SIT_STALL_HEIGHT = 0.0875  # [m] halfway between SIT_Z 0.060 and STAND_Z 0.115
+
+
+class SitStall(ManagerTermBase):
+    """1 while a sit command is older than ``grace_s`` and the root is still above ``height``."""
+
+    def __init__(self, cfg, env):
+        super().__init__(env)
+        self._sit = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        self._age = torch.zeros(env.num_envs, device=env.device)
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        ids = slice(None) if env_ids is None else env_ids
+        self._age[ids] = 0.0
+
+    def __call__(
+        self,
+        env,
+        command_name: str = "twist",
+        grace_s: float = SIT_STALL_GRACE_S,
+        height: float = SIT_STALL_HEIGHT,
+        asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    ) -> torch.Tensor:
+        sit = env.command_manager.get_term(command_name).vel_command_b[:, 0] > 0.5
+        self._age = torch.where(sit == self._sit, self._age + env.step_dt, torch.zeros_like(self._age))
+        self._sit = sit
+        z = env.scene[asset_cfg.name].data.root_link_pos_w[:, 2]
+        return (sit & (self._age > grace_s) & (z > height)).float()
+
+
+def make_no_sit_stall(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
+    """Adds the sit-stall cost to a sit-stand cfg."""
+    cfg.rewards["sit_stall"] = RewardTermCfg(func=SitStall, weight=SIT_STALL_WEIGHT, params={})
+    return cfg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Stand-up taught by Pollen's stand expert
 # ─────────────────────────────────────────────────────────────────────────────
 
