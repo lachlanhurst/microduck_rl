@@ -513,3 +513,23 @@ def test_friction_scale_is_per_joint_in_the_env():
     finally:
         env.close()
 
+
+def test_dukki_tasks_low_pass_the_leg_targets():
+    """Every Dukki task's joint_pos action low-passes the legs at 0.7 as robotd does; the head is not filtered."""
+    import re
+
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjlab_microduck.tasks import dukki
+    from mjlab_microduck.tasks.lowpass_action import LowPassJointPositionActionCfg
+
+    for task in HEAD_POSE_TASKS:
+        action = load_env_cfg(task).actions["joint_pos"]
+        assert isinstance(action, LowPassJointPositionActionCfg), task
+        assert action.lowpass == {dukki.LEG_JOINTS: dukki.DUKKI_LEGS_LOWPASS}, task
+        assert action.clip == {k: pytest.approx(v) for k, v in dk.target_clip_rad().items()}, task
+    for name in ("left_knee", "right_hip_roll", "left_ankle", "right_hip_yaw"):
+        assert re.fullmatch(dukki.LEG_JOINTS, name)
+    for name in ("neck_pitch", "head_pitch", "head_yaw", "head_roll"):
+        assert not re.fullmatch(dukki.LEG_JOINTS, name)
+

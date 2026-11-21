@@ -9,7 +9,7 @@ from mjlab_microduck.tasks.lowpass_action import LowPassJointPositionActionCfg
 def test_lowpass_matches_robotd():
     cfg = load_env_cfg("Mjlab-Velocity-Flat-Dukki", play=True); cfg.scene.num_envs = 2
     a = cfg.actions["joint_pos"]
-    fields = {f.name: getattr(a, f.name) for f in dataclasses.fields(a) if f.init}
+    fields = {f.name: getattr(a, f.name) for f in dataclasses.fields(a) if f.init and f.name != "lowpass"}
     cfg.actions["joint_pos"] = LowPassJointPositionActionCfg(**fields, lowpass={r".*(hip|knee|ankle).*": 0.7})
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     try:

@@ -39,7 +39,14 @@ The critic keeps the true joint velocity (privileged).
    broke free at 1.5 to 4.7 times the fit's torque, the hip pitches, neck and head at about 1;
    the policy trained at 0.9 to 1.1 stuck, jerked and over-corrected.
 
-5. The joint stops: every joint target is clipped as the firmware's safety
+5. robotd's leg target low-pass: the joint_pos action filters the leg targets as robotd does
+   (``target = alpha * target + (1 - alpha) * previous``, alpha ``DUKKI_LEGS_LOWPASS``, default
+   0.7; env ``DUKKI_LEGS_LOWPASS``, 1.0 turns it off), and the robot's robotd.toml sets the same
+   ``policy.legs_lowpass``. Unfiltered, the walk policy stood calmly in simulation but stuck,
+   jerked and ran away on the robot (21/11/2026), with or without training on the robot's
+   friction; with the filter on the robot it stood without a fall.
+
+6. The joint stops: every joint target is clipped as the firmware's safety
    layer clips it on the robot (dukki_constants.target_clip_rad: 3 degrees
    inside the measured travel, head roll at its ±15 degree limit), so the
    policy meets in training the clamp it meets on the robot and a servo is
@@ -144,6 +151,36 @@ def use_dukki_friction(cfg: ManagerBasedRlEnvCfg, scale_range: tuple[float, floa
         if term is not None and term.func is microduck_mdp.randomize_bam_friction:
             term.func = randomize_bam_friction_per_joint
             term.params = {**term.params, "scale_range": tuple(scale_range)}
+    return cfg
+
+
+#: robotd's leg target low-pass (``policy.legs_lowpass``), trained with. See (5) in the module docstring.
+DUKKI_LEGS_LOWPASS = 0.7
+#: The joints it filters: everything in the legs, not the head.
+LEG_JOINTS = r".*(hip|knee|ankle).*"
+
+
+def dukki_legs_lowpass() -> float:
+    """``DUKKI_LEGS_LOWPASS`` from the environment, or the default."""
+    alpha = float(os.environ.get("DUKKI_LEGS_LOWPASS", DUKKI_LEGS_LOWPASS))
+    if not 0.0 < alpha <= 1.0:
+        raise ValueError(f"DUKKI_LEGS_LOWPASS must be in (0, 1], got {alpha}")
+    return alpha
+
+
+def use_legs_lowpass(cfg: ManagerBasedRlEnvCfg, alpha: float | None = None) -> ManagerBasedRlEnvCfg:
+    """Make the joint_pos action low-pass the leg targets as robotd does; 1.0 leaves it plain."""
+    from dataclasses import fields
+
+    from mjlab_microduck.tasks.lowpass_action import LowPassJointPositionActionCfg
+
+    if alpha is None:
+        alpha = dukki_legs_lowpass()
+    action = cfg.actions.get("joint_pos")
+    if action is None or alpha >= 1.0:
+        return cfg
+    kept = {f.name: getattr(action, f.name) for f in fields(action) if f.init and f.name != "lowpass"}
+    cfg.actions["joint_pos"] = LowPassJointPositionActionCfg(**kept, lowpass={LEG_JOINTS: alpha})
     return cfg
 
 
@@ -401,7 +438,7 @@ def make_dukki_variant(
             weight=OVER_LIMIT_WEIGHT,
             params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
         )
-    return apply_joint_stops(use_dukki_friction(cfg))
+    return use_legs_lowpass(apply_joint_stops(use_dukki_friction(cfg)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
