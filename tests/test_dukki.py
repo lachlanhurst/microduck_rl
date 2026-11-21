@@ -28,7 +28,7 @@ DUKKI_SPECS = [
     dk.get_dukki_backlash_spec,
     dk.get_dukki_allcollisions_backlash_spec,
 ]
-CAD_MASS = 1.0738  # the Fusion inertials, without cables and fasteners
+CAD_MASS = 1.0848  # the Fusion inertials and the 143 g heat-shrunk battery, without cables and fasteners
 
 
 def _physical(inertia):

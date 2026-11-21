@@ -49,9 +49,10 @@ from mjlab_microduck.robot.microduck_constants import (
 
 # ── Unmodelled mass ──────────────────────────────────────────────────────────
 # Cables (servo daisy chains, battery and head leads) and fasteners, which the
-# Fusion model has none of. About 100 g, estimated 08/11/2026; replace with
-# the weighed robot minus the MJCF's 1.074 kg. 0.0 reverts to the CAD masses.
-UNMODELLED_MASS = 0.100  # [kg]
+# Fusion model has none of. Weighed 19/11/2026: 1,011 g without the battery,
+# plus the 143 g battery (heat shrunk, 21/11/2026), minus the MJCF's 1.0848 kg. The 100 g estimate of
+# 08/11/2026 trained the 09/11 policies. 0.0 reverts to the CAD masses.
+UNMODELLED_MASS = 0.069  # [kg]
 
 
 def add_unmodelled_mass(spec: mujoco.MjSpec, mass: float | None = None) -> mujoco.MjSpec:
