@@ -32,11 +32,13 @@ The critic keeps the true joint velocity (privileged).
    perfectly rigid, and that would overheat the real servo in seconds). The
    allowance lets a joint press its stop with at most OVER_LIMIT_TORQUE.
 
-4. The head roll limit (dukki_constants.HEAD_ROLL_LIMIT_DEG, ±15 degrees, a
-   physical stop that damage may follow past): the head_roll joint target is
-   clipped to it, as the firmware's safety layer clips it on the robot, so the
-   servo is never driven into the stop; and the head pose command and its
-   curriculum are capped to ``HEAD_ROLL_COMMAND_SHARE`` of it.
+4. The joint stops: every joint target is clipped as the firmware's safety
+   layer clips it on the robot (dukki_constants.target_clip_rad: 3 degrees
+   inside the measured travel, head roll at its ±15 degree limit), so the
+   policy meets in training the clamp it meets on the robot and a servo is
+   never driven into a stop. The head pose command and its curriculum are
+   capped at ``HEAD_ROLL_COMMAND_SHARE`` of what each head joint can reach from
+   HOME inside that clip: the neck can pitch only about 12 degrees above HOME.
 
 Gain sweep. ``DUKKI_KP`` [N.m/rad] and ``DUKKI_KD`` [N.m.s/rad] set the gains
 of every joint (default dukki_constants.J288_KP / J288_KD). They are read when
@@ -50,6 +52,7 @@ the tasks are registered, so set them on the command line:
 from __future__ import annotations
 
 import os
+import re
 from copy import deepcopy
 
 import torch
@@ -65,11 +68,11 @@ from mjlab_microduck.actuator import J288DRActuator
 from mjlab_microduck.robot.dukki_constants import (
     J288_KD,
     J288_KP,
-    HEAD_ROLL_JOINT,
-    head_roll_limit_rad,
     make_dukki_robot_cfg,
     make_j288_actuators,
+    target_clip_rad,
 )
+from mjlab_microduck.robot.microduck_constants import HOME_FRAME
 from mjlab_microduck.tasks import mdp as microduck_mdp
 from mjlab_microduck.tasks.backlash import make_backlash_variant
 
@@ -82,45 +85,72 @@ OVER_LIMIT_WEIGHT = -1.0
 
 JOINT_VEL_SOURCES = ("position_difference", "reported_speed")
 
-#: Head roll commands stay within this share of the head roll limit: the margin
-#: the base curriculum keeps from the joint limits.
+#: Head pose commands stay within this share of what each head joint can reach
+#: from HOME inside its target clip: the margin the base curriculum keeps from
+#: the joint limits.
 HEAD_ROLL_COMMAND_SHARE = 0.9
-#: head_roll's place in the head pose command [neck_pitch, head_pitch, head_yaw, head_roll].
-HEAD_ROLL_COMMAND_INDEX = 3
+#: The head pose command's joints, in its order. Each dim is a delta from HOME.
+HEAD_POSE_JOINTS = ("neck_pitch", "head_pitch", "head_yaw", "head_roll")
+#: head_roll's place in the head pose command.
+HEAD_ROLL_COMMAND_INDEX = HEAD_POSE_JOINTS.index("head_roll")
 
 
-def _cap_range(ranges, index: int, cap: float):
+def home_rad(joint: str) -> float:
+    """``joint``'s HOME angle, from HOME_FRAME's name patterns."""
+    for pattern, value in HOME_FRAME.joint_pos.items():
+        if re.fullmatch(pattern, joint):
+            return float(value)
+    raise KeyError(f"no HOME angle for {joint}")
+
+
+def head_pose_caps(clip: dict[str, tuple[float, float]]) -> list[tuple[float, float]]:
+    """(lo, hi) bounds on each head pose command dim: ``HEAD_ROLL_COMMAND_SHARE``
+    of the delta from HOME that ``clip`` allows; unbounded for an unclipped joint."""
+    caps = []
+    for joint in HEAD_POSE_JOINTS:
+        if joint not in clip:
+            caps.append((-float("inf"), float("inf")))
+            continue
+        lo, hi = clip[joint]
+        home = home_rad(joint)
+        caps.append((HEAD_ROLL_COMMAND_SHARE * (lo - home), HEAD_ROLL_COMMAND_SHARE * (hi - home)))
+    return caps
+
+
+def _cap_ranges(ranges, caps):
     ranges = list(ranges)
-    lo, hi = ranges[index]
-    ranges[index] = (max(lo, -cap), min(hi, cap))
+    for i, (cap_lo, cap_hi) in enumerate(caps[: len(ranges)]):
+        lo, hi = ranges[i]
+        ranges[i] = (max(lo, cap_lo), min(hi, cap_hi))
     return tuple(ranges)
 
 
-def apply_head_roll_limit(cfg: ManagerBasedRlEnvCfg, limit_rad: float | None = None) -> ManagerBasedRlEnvCfg:
-    """Clip the head_roll target to ±``limit_rad`` and cap head roll commands.
+def apply_joint_stops(
+    cfg: ManagerBasedRlEnvCfg, clip: dict[str, tuple[float, float]] | None = None
+) -> ManagerBasedRlEnvCfg:
+    """Clip joint targets as the robot's safety layer does, and cap head pose commands to match.
 
-    ``limit_rad`` defaults to the dukki_constants head roll limit; nothing
-    changes when there is no limit. The joint_pos action's head_roll target
-    (after scale and offset) is clipped to the limit, the robot's safety layer
-    doing the same. The head pose command and its range curriculum are capped
-    at ``HEAD_ROLL_COMMAND_SHARE`` of the limit.
+    ``clip`` defaults to dukki_constants.target_clip_rad(). The joint_pos
+    action's targets (after scale and offset) are clipped to it. The head pose
+    command and its range curriculum are capped at ``HEAD_ROLL_COMMAND_SHARE``
+    of what each head joint can reach from HOME inside the clip.
     """
-    if limit_rad is None:
-        limit_rad = head_roll_limit_rad()
-    if limit_rad is None:
+    if clip is None:
+        clip = target_clip_rad()
+    if not clip:
         return cfg
     action = cfg.actions.get("joint_pos")
     if action is not None:
-        action.clip = {**(action.clip or {}), HEAD_ROLL_JOINT: (-limit_rad, limit_rad)}
-    cap = HEAD_ROLL_COMMAND_SHARE * limit_rad
+        action.clip = {**(action.clip or {}), **clip}
+    caps = head_pose_caps(clip)
     command = cfg.commands.get("head_pose")
-    if command is not None and len(command.ranges) > HEAD_ROLL_COMMAND_INDEX:
-        command.ranges = _cap_range(command.ranges, HEAD_ROLL_COMMAND_INDEX, cap)
+    if command is not None:
+        command.ranges = _cap_ranges(command.ranges, caps)
     curriculum = cfg.curriculum.get("head_pose_range")
     if curriculum is not None:
         stages = deepcopy(curriculum.params["range_stages"])
         for stage in stages:
-            stage["ranges"] = _cap_range(stage["ranges"], HEAD_ROLL_COMMAND_INDEX, cap)
+            stage["ranges"] = _cap_ranges(stage["ranges"], caps)
         curriculum.params = {**curriculum.params, "range_stages": stages}
     return cfg
 
@@ -309,7 +339,7 @@ def make_dukki_variant(
             weight=OVER_LIMIT_WEIGHT,
             params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
         )
-    return apply_head_roll_limit(cfg)
+    return apply_joint_stops(cfg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

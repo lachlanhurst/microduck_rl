@@ -71,14 +71,59 @@ def test_dukki_models_use_the_dukki_specs():
 
 @pytest.mark.parametrize("cad_fn, dukki_fn", list(zip(CAD_SPECS, DUKKI_SPECS)))
 def test_head_roll_limited_on_every_dukki_model(cad_fn, dukki_fn):
-    """head_roll narrowed to ±HEAD_ROLL_LIMIT_DEG; every other joint as the MJCF has it."""
+    """head_roll narrowed to ±HEAD_ROLL_LIMIT_DEG; every other actuated joint to the
+    MJCF's range narrowed by the measured travel; passive and free joints as the MJCF has them."""
     a, b = cad_fn().compile(), dukki_fn().compile()
     j = b.joint(dk.HEAD_ROLL_JOINT).id
     limit = np.radians(dk.HEAD_ROLL_LIMIT_DEG)
     np.testing.assert_allclose(b.jnt_range[j], [-limit, limit], atol=1e-12)
     assert a.jnt_range[j][1] > limit  # the MJCF's own range is wider (±25 degrees)
-    others = np.arange(b.njnt) != j
-    np.testing.assert_array_equal(b.jnt_range[others], a.jnt_range[others])
+    for k in range(b.njnt):
+        name = b.joint(k).name
+        if k == j:
+            continue
+        if name in dk.JOINT_TRAVEL_DEG:
+            lo, hi = np.radians(dk.JOINT_TRAVEL_DEG[name])
+            want = [max(a.jnt_range[k][0], lo), min(a.jnt_range[k][1], hi)]
+            np.testing.assert_allclose(b.jnt_range[k], want, atol=1e-12, err_msg=name)
+        else:
+            np.testing.assert_array_equal(b.jnt_range[k], a.jnt_range[k], err_msg=name)
+
+
+def test_joint_travel_only_narrows_and_reverts():
+    """The measured travel never widens a joint, and APPLY_JOINT_TRAVEL = False keeps the MJCF's ranges."""
+    cad = mc.get_walk_spec().compile()
+    model = dk.limit_joint_travel(mc.get_walk_spec()).compile()
+    assert (model.jnt_range[:, 0] >= cad.jnt_range[:, 0] - 1e-12).all()
+    assert (model.jnt_range[:, 1] <= cad.jnt_range[:, 1] + 1e-12).all()
+    neck = model.joint("neck_pitch").id
+    assert model.jnt_range[neck][1] == pytest.approx(np.radians(35.2))  # the MJCF's +60 is past the real stop
+    dk.APPLY_JOINT_TRAVEL = False
+    try:
+        unchanged = dk.limit_joint_travel(mc.get_walk_spec()).compile()
+        np.testing.assert_array_equal(unchanged.jnt_range, cad.jnt_range)
+        assert dk.target_clip_rad() == {dk.HEAD_ROLL_JOINT: pytest.approx((-limit_15(), limit_15()))}
+    finally:
+        dk.APPLY_JOINT_TRAVEL = True
+
+
+def limit_15() -> float:
+    return float(np.radians(dk.HEAD_ROLL_LIMIT_DEG))
+
+
+def test_target_clip_matches_the_firmware():
+    """The clip is the firmware's safety::target_ranges: 3 degrees inside the travel,
+    within ±pi, head roll at ±15; and the home pose lies inside it."""
+    clip = dk.target_clip_rad()
+    assert set(clip) == set(dk.JOINT_TRAVEL_DEG)
+    assert clip["left_knee"] == pytest.approx(tuple(np.radians([-116.3, 83.0])))
+    assert clip["left_hip_pitch"] == pytest.approx((-np.pi, np.radians(77.5)))
+    assert clip[dk.HEAD_ROLL_JOINT] == pytest.approx((-limit_15(), limit_15()))
+    import re
+
+    for name, (lo, hi) in clip.items():
+        home = next(v for p, v in mc.HOME_FRAME.joint_pos.items() if re.fullmatch(p, name))
+        assert lo < home < hi, name
 
 
 def test_head_roll_limit_reverts_at_none(monkeypatch):
@@ -374,31 +419,38 @@ HEAD_POSE_TASKS = [
 
 
 @pytest.mark.parametrize("task", HEAD_POSE_TASKS)
-def test_dukki_head_roll_commands_within_the_limit(task):
-    """Head pose command and curriculum never ask head_roll past 90% of its limit."""
+def test_dukki_head_pose_commands_within_the_stops(task):
+    """Head pose command and curriculum never ask a head joint past 90% of what it can reach
+    from HOME inside its target clip; every joint target is clipped as the robot clips it."""
     from mjlab.tasks.registry import load_env_cfg
 
     from mjlab_microduck.tasks import dukki
 
     base = load_env_cfg(task.replace("-Dukki", "-MicroDuck").replace("-Distill", ""))
     cfg = load_env_cfg(task)
-    i = dukki.HEAD_ROLL_COMMAND_INDEX
-    cap = dukki.HEAD_ROLL_COMMAND_SHARE * np.radians(dk.HEAD_ROLL_LIMIT_DEG)
+    clip = dk.target_clip_rad()
+    caps = dukki.head_pose_caps(clip)
+
+    def capped(ranges):
+        return [(max(lo, c_lo), min(hi, c_hi)) for (lo, hi), (c_lo, c_hi) in zip(ranges, caps, strict=True)]
+
     cmd, base_cmd = cfg.commands["head_pose"].ranges, base.commands["head_pose"].ranges
-    assert -cap - 1e-12 <= cmd[i][0] and cmd[i][1] <= cap + 1e-12
-    assert [r for k, r in enumerate(cmd) if k != i] == [r for k, r in enumerate(base_cmd) if k != i]
+    np.testing.assert_allclose(np.array(cmd), np.array(capped(base_cmd)), atol=1e-12)
     stages = cfg.curriculum["head_pose_range"].params["range_stages"]
     base_stages = base.curriculum["head_pose_range"].params["range_stages"]
     for stage, base_stage in zip(stages, base_stages, strict=True):
-        lo, hi = stage["ranges"][i]
-        assert -cap - 1e-12 <= lo and hi <= cap + 1e-12
+        np.testing.assert_allclose(np.array(stage["ranges"]), np.array(capped(base_stage["ranges"])), atol=1e-12)
         assert stage["step"] == base_stage["step"]
-    assert stages[-1]["ranges"][i] == pytest.approx((-cap, cap))
-    # The base task keeps its own (wider) final range.
-    assert base_stages[-1]["ranges"][i][1] > cap
-    # The head_roll target is clipped at the stop, as the robot's safety layer clips it.
-    limit = np.radians(dk.HEAD_ROLL_LIMIT_DEG)
-    assert cfg.actions["joint_pos"].clip == {dk.HEAD_ROLL_JOINT: pytest.approx((-limit, limit))}
+    i = dukki.HEAD_ROLL_COMMAND_INDEX
+    roll_cap = dukki.HEAD_ROLL_COMMAND_SHARE * np.radians(dk.HEAD_ROLL_LIMIT_DEG)
+    assert stages[-1]["ranges"][i] == pytest.approx((-roll_cap, roll_cap))
+    assert base_stages[-1]["ranges"][i][1] > roll_cap  # the base task keeps its own (wider) range
+    # The neck can pitch only about 12 degrees above HOME before its stop.
+    neck = dukki.HEAD_POSE_JOINTS.index("neck_pitch")
+    neck_cap = dukki.HEAD_ROLL_COMMAND_SHARE * (clip["neck_pitch"][1] - dukki.home_rad("neck_pitch"))
+    assert stages[-1]["ranges"][neck][1] == pytest.approx(neck_cap)
+    assert neck_cap < np.radians(12.0)
+    assert cfg.actions["joint_pos"].clip == {k: pytest.approx(v) for k, v in clip.items()}
     assert base.actions["joint_pos"].clip is None
 
 
@@ -422,3 +474,4 @@ def test_head_roll_target_clipped_in_the_env():
         torch.testing.assert_close(term._processed_actions[:, others], (raw * term._scale + term._offset)[:, others])
     finally:
         env.close()
+

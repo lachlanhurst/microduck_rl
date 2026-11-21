@@ -7,7 +7,7 @@ parts from their PA12 SLS / TPU materials and the bought parts weighed
 (microduck-unitree scripts/f360_to_mjcf, masses.json). The robot is 1.074 kg
 there, without cables and fasteners.
 
-This module adds three things the MJCFs do not have:
+This module adds four things the MJCFs do not have:
 
 * Cables and fasteners, ``UNMODELLED_MASS`` (an estimate, 100 g), spread
   over every body in proportion to its mass by ``add_unmodelled_mass``, so
@@ -19,6 +19,12 @@ This module adds three things the MJCFs do not have:
   (15 degrees either way, a design constraint from 09/11/2026; the MJCF has
   25), set by ``limit_head_roll`` the same way: ``None`` goes back to the
   MJCF's range.
+* The real robot's joint stops, ``JOINT_TRAVEL_DEG`` (measured by hand on
+  the assembled robot 21/11/2026, against the calibration jig's zeros), set
+  by ``limit_joint_travel``: each joint's range narrows to where the robot
+  meets something, never widens. ``APPLY_JOINT_TRAVEL = False`` reverts.
+  ``target_clip_rad`` is the firmware's target clamp, which tasks/dukki.py
+  applies to the policy's targets.
 * The J288 actuator model.
 
 Actuators: ``J288DRActuatorCfg`` with the M6 fit from the bench
@@ -104,9 +110,78 @@ def limit_head_roll(spec: mujoco.MjSpec, limit_deg: float | None = None) -> mujo
     return spec
 
 
+# ── Joint stops ──────────────────────────────────────────────────────────────
+# Where each joint first meets something, either way, in degrees: measured by
+# hand on the assembled robot with every servo limp (21/11/2026), against the
+# zeros the calibration jig gave (dukki hardware.md section 12,
+# hardware/calibration/). The same table as the firmware's
+# duck-control model::JOINT_TRAVEL_DEG; keep the two together. The mouth is
+# not in the MJCF.
+JOINT_TRAVEL_DEG: dict[str, tuple[float, float]] = {
+    "left_hip_yaw": (-42.5, 45.5),
+    "left_hip_roll": (-20.6, 26.8),
+    "left_hip_pitch": (-229.9, 80.5),
+    "left_knee": (-119.3, 86.0),
+    "left_ankle": (-79.9, 69.8),
+    "neck_pitch": (-150.0, 35.2),
+    "head_pitch": (-82.9, 98.3),
+    "head_yaw": (-177.2, 168.3),
+    "head_roll": (-20.9, 20.4),
+    "right_hip_yaw": (-35.7, 46.5),
+    "right_hip_roll": (-25.4, 24.3),
+    "right_hip_pitch": (-81.7, 200.5),
+    "right_knee": (-85.9, 117.8),
+    "right_ankle": (-73.4, 76.5),
+}
+#: The firmware holds every target this far inside the travel
+#: (duck-control model::STOP_MARGIN_DEG), so the servo never presses a stop.
+STOP_MARGIN_DEG = 3.0
+#: The firmware's actuator bound on every target (duck-control safety::ACTUATOR_MIN/MAX).
+ACTUATOR_LIMIT_RAD = float(np.pi)
+#: False keeps the MJCF's ranges and clips no target but head roll's.
+APPLY_JOINT_TRAVEL = True
+
+
+def limit_joint_travel(spec: mujoco.MjSpec) -> mujoco.MjSpec:
+    """Narrow each joint's range to the real robot's stops (``JOINT_TRAVEL_DEG``).
+
+    Only narrows: where the robot travels further than the MJCF allows (the hip
+    yaws, the hip pitches' far side), the MJCF's range stays, so the training
+    distribution does not grow.
+    """
+    if not APPLY_JOINT_TRAVEL:
+        return spec
+    for name, (lo_deg, hi_deg) in JOINT_TRAVEL_DEG.items():
+        joint = spec.joint(name)
+        lo, hi = joint.range
+        joint.range = [max(lo, np.radians(lo_deg)), min(hi, np.radians(hi_deg))]
+    return spec
+
+
+def target_clip_rad() -> dict[str, tuple[float, float]]:
+    """Each joint's target range as the firmware's safety layer clamps it, radians.
+
+    ``STOP_MARGIN_DEG`` inside the measured travel, within the actuator bound,
+    and head roll within its limit: duck-control's safety::target_ranges. Only
+    head roll's limit when ``APPLY_JOINT_TRAVEL`` is off.
+    """
+    clip: dict[str, tuple[float, float]] = {}
+    if APPLY_JOINT_TRAVEL:
+        for name, (lo_deg, hi_deg) in JOINT_TRAVEL_DEG.items():
+            clip[name] = (
+                max(float(np.radians(lo_deg + STOP_MARGIN_DEG)), -ACTUATOR_LIMIT_RAD),
+                min(float(np.radians(hi_deg - STOP_MARGIN_DEG)), ACTUATOR_LIMIT_RAD),
+            )
+    roll = head_roll_limit_rad()
+    if roll is not None:
+        lo, hi = clip.get(HEAD_ROLL_JOINT, (-roll, roll))
+        clip[HEAD_ROLL_JOINT] = (max(lo, -roll), min(hi, roll))
+    return clip
+
+
 def dukki_spec(spec: mujoco.MjSpec) -> mujoco.MjSpec:
-    """The Dukki changes to a loaded MJCF: unmodelled mass and the head roll limit."""
-    return limit_head_roll(add_unmodelled_mass(spec))
+    """The Dukki changes to a loaded MJCF: unmodelled mass, the head roll limit and the joint stops."""
+    return limit_joint_travel(limit_head_roll(add_unmodelled_mass(spec)))
 
 
 def get_dukki_walk_spec() -> mujoco.MjSpec:
