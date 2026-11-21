@@ -97,7 +97,8 @@ def test_joint_travel_only_narrows_and_reverts():
     assert (model.jnt_range[:, 0] >= cad.jnt_range[:, 0] - 1e-12).all()
     assert (model.jnt_range[:, 1] <= cad.jnt_range[:, 1] + 1e-12).all()
     neck = model.joint("neck_pitch").id
-    assert model.jnt_range[neck][1] == pytest.approx(np.radians(35.2))  # the MJCF's +60 is past the real stop
+    assert model.jnt_range[neck][1] == pytest.approx(np.radians(dk.JOINT_TRAVEL_DEG["neck_pitch"][1]))
+    assert model.jnt_range[neck][1] < cad.jnt_range[neck][1]  # the MJCF's +60 is past the real stop
     dk.APPLY_JOINT_TRAVEL = False
     try:
         unchanged = dk.limit_joint_travel(mc.get_walk_spec()).compile()
@@ -116,8 +117,9 @@ def test_target_clip_matches_the_firmware():
     within ±pi, head roll at ±15; and the home pose lies inside it."""
     clip = dk.target_clip_rad()
     assert set(clip) == set(dk.JOINT_TRAVEL_DEG)
-    assert clip["left_knee"] == pytest.approx(tuple(np.radians([-116.3, 83.0])))
-    assert clip["left_hip_pitch"] == pytest.approx((-np.pi, np.radians(77.5)))
+    lo, hi = dk.JOINT_TRAVEL_DEG["left_knee"]
+    assert clip["left_knee"] == pytest.approx(tuple(np.radians([lo + 3.0, hi - 3.0])))
+    assert clip["left_hip_pitch"] == pytest.approx((-np.pi, np.radians(dk.JOINT_TRAVEL_DEG["left_hip_pitch"][1] - 3.0)))
     assert clip[dk.HEAD_ROLL_JOINT] == pytest.approx((-limit_15(), limit_15()))
     import re
 

@@ -113,25 +113,25 @@ def limit_head_roll(spec: mujoco.MjSpec, limit_deg: float | None = None) -> mujo
 # ── Joint stops ──────────────────────────────────────────────────────────────
 # Where each joint first meets something, either way, in degrees: measured by
 # hand on the assembled robot with every servo limp (21/11/2026), against the
-# zeros the calibration jig gave (dukki hardware.md section 12,
+# zeros the calibration jig gave (averaged over four seatings) (dukki hardware.md section 12,
 # hardware/calibration/). The same table as the firmware's
 # duck-control model::JOINT_TRAVEL_DEG; keep the two together. The mouth is
 # not in the MJCF.
 JOINT_TRAVEL_DEG: dict[str, tuple[float, float]] = {
-    "left_hip_yaw": (-42.5, 45.5),
-    "left_hip_roll": (-20.6, 26.8),
-    "left_hip_pitch": (-229.9, 80.5),
-    "left_knee": (-119.3, 86.0),
-    "left_ankle": (-79.9, 69.8),
-    "neck_pitch": (-150.0, 35.2),
-    "head_pitch": (-82.9, 98.3),
+    "left_hip_yaw": (-44.8, 43.2),
+    "left_hip_roll": (-19.8, 27.6),
+    "left_hip_pitch": (-228.3, 82.1),
+    "left_knee": (-117.4, 87.9),
+    "left_ankle": (-77.9, 71.8),
+    "neck_pitch": (-150.8, 34.4),
+    "head_pitch": (-85.6, 95.6),
     "head_yaw": (-177.2, 168.3),
-    "head_roll": (-20.9, 20.4),
-    "right_hip_yaw": (-35.7, 46.5),
-    "right_hip_roll": (-25.4, 24.3),
-    "right_hip_pitch": (-81.7, 200.5),
-    "right_knee": (-85.9, 117.8),
-    "right_ankle": (-73.4, 76.5),
+    "head_roll": (-20.4, 20.9),
+    "right_hip_yaw": (-36.6, 45.6),
+    "right_hip_roll": (-25.2, 24.5),
+    "right_hip_pitch": (-82.0, 200.2),
+    "right_knee": (-85.0, 118.7),
+    "right_ankle": (-73.2, 76.7),
 }
 #: The firmware holds every target this far inside the travel
 #: (duck-control model::STOP_MARGIN_DEG), so the servo never presses a stop.
