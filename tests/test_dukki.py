@@ -477,3 +477,39 @@ def test_head_roll_target_clipped_in_the_env():
     finally:
         env.close()
 
+
+def test_dukki_tasks_randomise_friction_per_joint():
+    """Every Dukki task that randomises BAM friction does it per joint, 1 to 3 times the bench fit."""
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjlab_microduck.tasks import dukki
+
+    for task in HEAD_POSE_TASKS:
+        terms = [t for t in load_env_cfg(task).events.values()
+                 if t is not None and t.func is dukki.randomize_bam_friction_per_joint]
+        assert terms, task
+        assert all(t.params["scale_range"] == dukki.DUKKI_FRICTION_SCALE_RANGE for t in terms), task
+
+
+def test_friction_scale_is_per_joint_in_the_env():
+    """After a reset each joint has its own friction scale, inside the range."""
+    from mjlab.envs import ManagerBasedRlEnv
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjlab_microduck.actuator.friction_dr_bam import FrictionDRMixin
+
+    cfg = load_env_cfg("Mjlab-Velocity-Flat-Dukki", play=True)
+    cfg.scene.num_envs = 4
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+        env.reset()
+        acts = [a for a in env.scene["robot"].actuators if isinstance(a, FrictionDRMixin)]
+        assert acts
+        for a in acts:
+            scale = a.friction_scale
+            assert scale.shape == (4, len(a._dof_ids))
+            assert float(scale.min()) >= 1.0 and float(scale.max()) <= 3.0
+            assert float(scale.std(dim=1).min()) > 0.0  # joints differ within an env
+    finally:
+        env.close()
+

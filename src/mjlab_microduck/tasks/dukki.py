@@ -32,7 +32,14 @@ The critic keeps the true joint velocity (privileged).
    perfectly rigid, and that would overheat the real servo in seconds). The
    allowance lets a joint press its stop with at most OVER_LIMIT_TORQUE.
 
-4. The joint stops: every joint target is clipped as the firmware's safety
+4. Joint friction for the assembled robot: every Dukki task samples each joint's friction
+   scale on BAM's bench fit independently per episode, in ``DUKKI_FRICTION_SCALE_RANGE``
+   (env ``DUKKI_FRICTION``, "lo,hi"), where the base task samples one scale for all joints in
+   0.9 to 1.1. Standing on the robot (21/11/2026) the ankles, hip rolls, a hip yaw and the knees
+   broke free at 1.5 to 4.7 times the fit's torque, the hip pitches, neck and head at about 1;
+   the policy trained at 0.9 to 1.1 stuck, jerked and over-corrected.
+
+5. The joint stops: every joint target is clipped as the firmware's safety
    layer clips it on the robot (dukki_constants.target_clip_rad: 3 degrees
    inside the measured travel, head roll at its ±15 degree limit), so the
    policy meets in training the clamp it meets on the robot and a servo is
@@ -84,6 +91,61 @@ OVER_LIMIT_TORQUE = 0.2
 OVER_LIMIT_WEIGHT = -1.0
 
 JOINT_VEL_SOURCES = ("position_difference", "reported_speed")
+
+#: Each joint's friction scale on BAM's bench fit (m6), sampled per joint per episode. See (4) in
+#: the module docstring. ``DUKKI_FRICTION="lo,hi"`` overrides it when the tasks are registered.
+DUKKI_FRICTION_SCALE_RANGE = (1.0, 3.0)
+
+
+def dukki_friction_range() -> tuple[float, float]:
+    """``DUKKI_FRICTION`` ("lo,hi") or ``DUKKI_FRICTION_SCALE_RANGE``."""
+    text = os.environ.get("DUKKI_FRICTION")
+    if not text:
+        return DUKKI_FRICTION_SCALE_RANGE
+    lo, hi = (float(v) for v in text.split(","))
+    if not 0.0 < lo <= hi:
+        raise ValueError(f"DUKKI_FRICTION must be 0 < lo <= hi, got {text!r}")
+    return lo, hi
+
+
+def randomize_bam_friction_per_joint(
+    env,
+    env_ids: torch.Tensor | None,
+    scale_range: tuple[float, float],
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+):
+    """Like ``mdp.randomize_bam_friction``, but each joint gets its own scale.
+
+    The friction-DR actuators hold ``friction_scale`` as (num_envs, 1), one scale for every joint;
+    BAM multiplies its (num_envs, num_joints) friction budget by it, so a (num_envs, num_joints)
+    scale works the same way, a joint at a time. Widened to that shape the first time.
+    """
+    from mjlab_microduck.actuator.friction_dr_bam import FrictionDRMixin
+
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+    else:
+        env_ids = env_ids.to(env.device, dtype=torch.long)
+    lo, hi = scale_range
+    for actuator in env.scene[asset_cfg.name].actuators:
+        if not isinstance(actuator, FrictionDRMixin):
+            continue
+        joints = len(actuator._dof_ids)
+        if actuator.friction_scale.shape[1] != joints:
+            actuator.friction_scale = actuator.friction_scale.expand(-1, joints).clone()
+        actuator.friction_scale[env_ids] = torch.rand(len(env_ids), joints, device=env.device) * (hi - lo) + lo
+
+
+def use_dukki_friction(cfg: ManagerBasedRlEnvCfg, scale_range: tuple[float, float] | None = None) -> ManagerBasedRlEnvCfg:
+    """Swap every BAM friction randomisation in ``cfg`` for the per-joint Dukki one."""
+    if scale_range is None:
+        scale_range = dukki_friction_range()
+    for term in cfg.events.values():
+        if term is not None and term.func is microduck_mdp.randomize_bam_friction:
+            term.func = randomize_bam_friction_per_joint
+            term.params = {**term.params, "scale_range": tuple(scale_range)}
+    return cfg
+
 
 #: Head pose commands stay within this share of what each head joint can reach
 #: from HOME inside its target clip: the margin the base curriculum keeps from
@@ -339,7 +401,7 @@ def make_dukki_variant(
             weight=OVER_LIMIT_WEIGHT,
             params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
         )
-    return apply_joint_stops(cfg)
+    return apply_joint_stops(use_dukki_friction(cfg))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
