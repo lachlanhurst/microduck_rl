@@ -552,6 +552,21 @@ def test_dukki_tasks_widen_encoder_bias_and_randomise_kp():
         assert term.func is dukki.randomize_j288_kp_per_joint and term.params["scale_range"] == dukki.DUKKI_KP_SCALE_RANGE
 
 
+def test_calibration_spread_can_be_turned_off(monkeypatch):
+    """DUKKI_CALIBRATION_SPREAD=0 leaves the base task's encoder offsets and adds no kp event."""
+    from mjlab_microduck.tasks import dukki
+    from mjlab_microduck.tasks.microduck_velocity_env_cfg import ENCODER_BIAS_RANGE, make_microduck_velocity_env_cfg
+
+    monkeypatch.setenv("DUKKI_CALIBRATION_SPREAD", "0")
+    assert not dukki.dukki_calibration_spread()
+    cfg = dukki.use_dukki_calibration_spread(make_microduck_velocity_env_cfg())
+    assert cfg.events["encoder_bias"].params["bias_range"] == ENCODER_BIAS_RANGE
+    assert "randomize_j288_kp" not in cfg.events
+    monkeypatch.setenv("DUKKI_CALIBRATION_SPREAD", "1")
+    cfg = dukki.use_dukki_calibration_spread(make_microduck_velocity_env_cfg())
+    assert cfg.events["encoder_bias"].params["bias_range"] == dukki.DUKKI_ENCODER_BIAS_RANGE
+    assert "randomize_j288_kp" in cfg.events
+
 def test_kp_is_scaled_per_joint_in_the_env():
     """After a reset each joint's kp is its default times its own factor in 0.85 to 1.15."""
     from mjlab.envs import ManagerBasedRlEnv

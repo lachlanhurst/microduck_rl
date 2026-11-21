@@ -49,7 +49,10 @@ The critic keeps the true joint velocity (privileged).
 6. Calibration and servo spread: each joint's encoder offset in ±2 degrees, fixed per simulated
    robot for the run like a calibration error (``DUKKI_ENCODER_BIAS_RANGE``; the jig repeats to about 1 to 1.5 degrees, the base task uses
    ±0.86), and each joint's kp scaled per episode in ``DUKKI_KP_SCALE_RANGE`` (0.85 to 1.15; the
-   base task's gain randomisation is off).
+   base task's gain randomisation is off). ``DUKKI_CALIBRATION_SPREAD=0`` turns both off (the base
+   task's ±0.86 degree offsets stay): the two policies trained with them (runs *_dukki-walk-robust-*
+   and *_dukki-walk-lownoise-*) were calmer standing on the robot but fell under pushes the
+   unspread 9250 recovered from (21/11/2026).
 
 7. The joint stops: every joint target is clipped as the firmware's safety
    layer clips it on the robot (dukki_constants.target_clip_rad: 3 degrees
@@ -189,8 +192,18 @@ def randomize_j288_kp_per_joint(
             actuator.kp[env_ids] = actuator.default_kp[env_ids] * scale
 
 
-def use_dukki_calibration_spread(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
-    """Widen the encoder offsets to the jig's repeatability and randomise each joint's kp."""
+def dukki_calibration_spread() -> bool:
+    """``DUKKI_CALIBRATION_SPREAD`` from the environment: on unless "0", "false" or "off"."""
+    return os.environ.get("DUKKI_CALIBRATION_SPREAD", "1").strip().lower() not in ("0", "false", "off")
+
+
+def use_dukki_calibration_spread(cfg: ManagerBasedRlEnvCfg, enabled: bool | None = None) -> ManagerBasedRlEnvCfg:
+    """Widen the encoder offsets to the jig's repeatability and randomise each joint's kp, unless
+    ``enabled`` (default ``DUKKI_CALIBRATION_SPREAD``) is off."""
+    if enabled is None:
+        enabled = dukki_calibration_spread()
+    if not enabled:
+        return cfg
     if "encoder_bias" in cfg.events and cfg.events["encoder_bias"] is not None:
         term = cfg.events["encoder_bias"]
         term.params = {**term.params, "bias_range": DUKKI_ENCODER_BIAS_RANGE}
