@@ -39,14 +39,19 @@ The critic keeps the true joint velocity (privileged).
    broke free at 1.5 to 4.7 times the fit's torque, the hip pitches, neck and head at about 1;
    the policy trained at 0.9 to 1.1 stuck, jerked and over-corrected.
 
-5. robotd's leg target low-pass: the joint_pos action filters the leg targets as robotd does
-   (``target = alpha * target + (1 - alpha) * previous``, alpha ``DUKKI_LEGS_LOWPASS``, default
-   0.7; env ``DUKKI_LEGS_LOWPASS``, 1.0 turns it off), and the robot's robotd.toml sets the same
-   ``policy.legs_lowpass``. Unfiltered, the walk policy stood calmly in simulation but stuck,
-   jerked and ran away on the robot (21/11/2026), with or without training on the robot's
-   friction; with the filter on the robot it stood without a fall.
+5. robotd's leg target low-pass, off by default (``DUKKI_LEGS_LOWPASS`` 1.0; env
+   ``DUKKI_LEGS_LOWPASS``). On the robot robotd filters the legs at 0.7 and the head at 0.5,
+   which steadied the walk policy's stand (21/11/2026). Trained with the leg filter, the walk
+   policy learned to stand still for every slow command, sideways and backwards (run
+   *_dukki-walk-lowpass-*), as Pollen found (microduck_rl 9cc8fc1a, reverted 0a865d93): train
+   unfiltered, filter on the robot.
 
-6. The joint stops: every joint target is clipped as the firmware's safety
+6. Calibration and servo spread: each joint's encoder offset in ±2 degrees, fixed per simulated
+   robot for the run like a calibration error (``DUKKI_ENCODER_BIAS_RANGE``; the jig repeats to about 1 to 1.5 degrees, the base task uses
+   ±0.86), and each joint's kp scaled per episode in ``DUKKI_KP_SCALE_RANGE`` (0.85 to 1.15; the
+   base task's gain randomisation is off).
+
+7. The joint stops: every joint target is clipped as the firmware's safety
    layer clips it on the robot (dukki_constants.target_clip_rad: 3 degrees
    inside the measured travel, head roll at its ±15 degree limit), so the
    policy meets in training the clamp it meets on the robot and a servo is
@@ -154,8 +159,47 @@ def use_dukki_friction(cfg: ManagerBasedRlEnvCfg, scale_range: tuple[float, floa
     return cfg
 
 
-#: robotd's leg target low-pass (``policy.legs_lowpass``), trained with. See (5) in the module docstring.
-DUKKI_LEGS_LOWPASS = 0.7
+#: robotd's leg target low-pass in training. Off: see (5) in the module docstring.
+DUKKI_LEGS_LOWPASS = 1.0
+#: Each joint's encoder offset, rad, drawn once per simulated robot (the base task's startup event). See (6) in the module docstring.
+DUKKI_ENCODER_BIAS_RANGE = (-0.035, 0.035)
+#: Each joint's kp scale, per joint per episode. See (6) in the module docstring.
+DUKKI_KP_SCALE_RANGE = (0.85, 1.15)
+
+
+def randomize_j288_kp_per_joint(
+    env,
+    env_ids: torch.Tensor | None,
+    scale_range: tuple[float, float],
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+):
+    """Scale each joint's J288 kp by its own factor in ``scale_range`` for the episode.
+
+    Runs after the scene reset has put every kp back to its default (J288DRActuator.reset), so
+    the scale is applied to the default and does not accumulate.
+    """
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+    else:
+        env_ids = env_ids.to(env.device, dtype=torch.long)
+    lo, hi = scale_range
+    for actuator in env.scene[asset_cfg.name].actuators:
+        if isinstance(actuator, J288DRActuator) and actuator.kp is not None:
+            scale = torch.rand(len(env_ids), actuator.kp.shape[1], device=env.device) * (hi - lo) + lo
+            actuator.kp[env_ids] = actuator.default_kp[env_ids] * scale
+
+
+def use_dukki_calibration_spread(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
+    """Widen the encoder offsets to the jig's repeatability and randomise each joint's kp."""
+    if "encoder_bias" in cfg.events and cfg.events["encoder_bias"] is not None:
+        term = cfg.events["encoder_bias"]
+        term.params = {**term.params, "bias_range": DUKKI_ENCODER_BIAS_RANGE}
+    cfg.events["randomize_j288_kp"] = EventTermCfg(
+        func=randomize_j288_kp_per_joint,
+        mode="reset",
+        params={"scale_range": DUKKI_KP_SCALE_RANGE},
+    )
+    return cfg
 #: The joints it filters: everything in the legs, not the head.
 LEG_JOINTS = r".*(hip|knee|ankle).*"
 
@@ -438,7 +482,7 @@ def make_dukki_variant(
             weight=OVER_LIMIT_WEIGHT,
             params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
         )
-    return use_legs_lowpass(apply_joint_stops(use_dukki_friction(cfg)))
+    return use_legs_lowpass(apply_joint_stops(use_dukki_calibration_spread(use_dukki_friction(cfg))))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

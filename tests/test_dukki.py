@@ -514,22 +514,61 @@ def test_friction_scale_is_per_joint_in_the_env():
         env.close()
 
 
-def test_dukki_tasks_low_pass_the_leg_targets():
-    """Every Dukki task's joint_pos action low-passes the legs at 0.7 as robotd does; the head is not filtered."""
+def test_dukki_tasks_train_unfiltered_but_can_low_pass():
+    """Dukki tasks train with the plain action (Pollen's recipe: filter only on the robot);
+    use_legs_lowpass still builds robotd's leg filter when asked."""
     import re
 
+    from mjlab.envs.mdp.actions import JointPositionActionCfg
     from mjlab.tasks.registry import load_env_cfg
 
     from mjlab_microduck.tasks import dukki
     from mjlab_microduck.tasks.lowpass_action import LowPassJointPositionActionCfg
 
+    assert dukki.DUKKI_LEGS_LOWPASS == 1.0
     for task in HEAD_POSE_TASKS:
         action = load_env_cfg(task).actions["joint_pos"]
-        assert isinstance(action, LowPassJointPositionActionCfg), task
-        assert action.lowpass == {dukki.LEG_JOINTS: dukki.DUKKI_LEGS_LOWPASS}, task
-        assert action.clip == {k: pytest.approx(v) for k, v in dk.target_clip_rad().items()}, task
+        assert type(action) is JointPositionActionCfg, task
+    cfg = dukki.use_legs_lowpass(load_env_cfg("Mjlab-Velocity-Flat-Dukki"), 0.7)
+    action = cfg.actions["joint_pos"]
+    assert isinstance(action, LowPassJointPositionActionCfg)
+    assert action.lowpass == {dukki.LEG_JOINTS: 0.7}
     for name in ("left_knee", "right_hip_roll", "left_ankle", "right_hip_yaw"):
         assert re.fullmatch(dukki.LEG_JOINTS, name)
     for name in ("neck_pitch", "head_pitch", "head_yaw", "head_roll"):
         assert not re.fullmatch(dukki.LEG_JOINTS, name)
 
+
+def test_dukki_tasks_widen_encoder_bias_and_randomise_kp():
+    """Encoder offsets in ±2 degrees and a per-joint kp scale event, on every Dukki task."""
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjlab_microduck.tasks import dukki
+
+    for task in HEAD_POSE_TASKS:
+        cfg = load_env_cfg(task)
+        assert cfg.events["encoder_bias"].params["bias_range"] == dukki.DUKKI_ENCODER_BIAS_RANGE, task
+        term = cfg.events["randomize_j288_kp"]
+        assert term.func is dukki.randomize_j288_kp_per_joint and term.params["scale_range"] == dukki.DUKKI_KP_SCALE_RANGE
+
+
+def test_kp_is_scaled_per_joint_in_the_env():
+    """After a reset each joint's kp is its default times its own factor in 0.85 to 1.15."""
+    from mjlab.envs import ManagerBasedRlEnv
+    from mjlab.tasks.registry import load_env_cfg
+
+    from mjlab_microduck.actuator import J288DRActuator
+
+    cfg = load_env_cfg("Mjlab-Velocity-Flat-Dukki", play=True)
+    cfg.scene.num_envs = 4
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+        env.reset()
+        acts = [a for a in env.scene["robot"].actuators if isinstance(a, J288DRActuator)]
+        assert acts
+        for a in acts:
+            ratio = a.kp / a.default_kp
+            assert float(ratio.min()) >= 0.85 - 1e-6 and float(ratio.max()) <= 1.15 + 1e-6
+            assert float(ratio.std(dim=1).min()) > 0.0
+    finally:
+        env.close()
