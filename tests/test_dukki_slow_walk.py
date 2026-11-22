@@ -197,3 +197,22 @@ def test_smoothed_yaw_tracking_pays_turning_not_standing():
         out = dk.track_ang_vel_smoothed(env, std=0.3)
     turning, standing = out.tolist()
     assert turning > 0.9 and standing < 0.1
+
+
+@pytest.mark.parametrize("task", ["Mjlab-SitStand-Flat-Backlash-Dukki", "Mjlab-StandUp-Flat-Backlash-Dukki"])
+def test_gear_play_twins_of_sit_stand_and_stand_up_run(task):
+    """The groundcontact model's backlash twin under the Dukki variant: builds, resets and steps,
+    with the same policy interface as the task without play."""
+    cfg = load_env_cfg(task, play=True)
+    cfg.scene.num_envs = 2
+    plain = load_env_cfg(task.replace("-Backlash", ""), play=True)
+    assert len(cfg.observations["actor"].terms) == len(plain.observations["actor"].terms)
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+        env.reset()
+        names = list(env.scene["robot"].joint_names)
+        assert any("backlash" in n for n in names)
+        assert env.action_manager.total_action_dim == 14
+        env.step(torch.zeros(2, env.action_manager.total_action_dim))
+    finally:
+        env.close()

@@ -261,6 +261,8 @@ _DUKKI_MODELS = {
     "allcollisions": (get_dukki_allcollisions_spec, HOME_FRAME),
     "walk_backlash": (get_dukki_walk_backlash_spec, BACKLASH_HOME_FRAME),
     "backlash": (get_dukki_backlash_spec, BACKLASH_HOME_FRAME),
+    # The groundcontact model's backlash twin under the name its base task uses (StandUp, SitStand).
+    "standup_backlash": (get_dukki_backlash_spec, BACKLASH_HOME_FRAME),
     "allcollisions_backlash": (get_dukki_allcollisions_backlash_spec, BACKLASH_HOME_FRAME),
 }
 

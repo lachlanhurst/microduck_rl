@@ -297,11 +297,14 @@ _DUKKI_TASKS = (
     ("Mjlab-VelStand-Flat-Dukki", make_microduck_velstand_env_cfg, {}, MicroduckVelStandRlCfg, "allcollisions", False),
     ("Mjlab-StandUp-Flat-Dukki", make_microduck_standup_env_cfg, {}, MicroduckStandUpRlCfg, "standup", False),
     ("Mjlab-SitStand-Flat-Dukki", make_microduck_sitstand_env_cfg, {}, MicroduckSitStandRlCfg, "standup", False),
+    ("Mjlab-StandUp-Flat-Backlash-Dukki", make_microduck_standup_env_cfg, {}, MicroduckStandUpRlCfg, "standup", True),
+    ("Mjlab-SitStand-Flat-Backlash-Dukki", make_microduck_sitstand_env_cfg, {}, MicroduckSitStandRlCfg, "standup", True),
 )
 # Sit-stand also gives a share of robots episodes with the head still and no pushes,
 # keeps the head off the ground, taxes stalling in either posture and moves softly both ways (dukki.py).
 _DUKKI_EXTRAS = {
-    "Mjlab-SitStand-Flat-Dukki": (make_still_practice, make_head_off_ground, make_no_sit_stall, make_soft_transitions)
+    "Mjlab-SitStand-Flat-Dukki": (make_still_practice, make_head_off_ground, make_no_sit_stall, make_soft_transitions),
+    "Mjlab-SitStand-Flat-Backlash-Dukki": (make_still_practice, make_head_off_ground, make_no_sit_stall, make_soft_transitions),
 }
 
 
