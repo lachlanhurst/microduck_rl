@@ -4774,16 +4774,23 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         super()._resample_command(env_ids)
+        # One draw per env picks at most one bucket: turn in place below p, slow walk
+        # in [p, p + p_slow). With p_slow = 0 the draws are exactly as before.
+        p = getattr(self.cfg, "rel_turn_in_place_envs", 0.0)
+        p_slow = getattr(self.cfg, "rel_slow_walk_envs", 0.0)
+        if p <= 0.0 and p_slow <= 0.0:
+            return
+        r = torch.empty(len(env_ids), device=self.device).uniform_(0.0, 1.0)
+        if p_slow > 0.0:
+            self._resample_slow_walk(env_ids[(r >= p) & (r < p + p_slow)])
         # Turn-in-place practice: for a fraction of envs, zero the linear velocity
         # and force a meaningful (away-from-zero) yaw command. Independent uniform
         # sampling almost never produces "lin≈0, |ang| large" (~2% of samples), so
         # spinning on the spot was effectively untrained → slow/unstable real-robot
         # turning. Mirrors the base rel_forward_envs mechanism.
-        p = getattr(self.cfg, "rel_turn_in_place_envs", 0.0)
         if p <= 0.0:
             return
-        r = torch.empty(len(env_ids), device=self.device)
-        turn_ids = env_ids[r.uniform_(0.0, 1.0) < p]
+        turn_ids = env_ids[r < p]
         if len(turn_ids) == 0:
             return
         self.vel_command_b[turn_ids, 0] = 0.0
@@ -4799,6 +4806,23 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
         # zero the command) and refresh the world-frame reference copy.
         self.is_standing_env[turn_ids] = False
         self.vel_command_w[turn_ids] = self.vel_command_b[turn_ids]
+
+    def _resample_slow_walk(self, ids: torch.Tensor) -> None:
+        """Slow straight walking: |vx| in ``slow_walk_speed``, either way, no strafe or turn.
+
+        Uniform sampling over the full ranges puts few commands where the robot is only asked
+        to walk slowly, and a policy that stands still there keeps most of the tracking reward:
+        Dukki's fine-tunes learned to stand at slow commands (22/11/2026)."""
+        if len(ids) == 0:
+            return
+        lo, hi = getattr(self.cfg, "slow_walk_speed", (0.1, 0.25))
+        speed = torch.empty(len(ids), device=self.device).uniform_(lo, hi)
+        sign = torch.where(torch.rand(len(ids), device=self.device) < 0.5, -1.0, 1.0)
+        self.vel_command_b[ids, 0] = sign * speed
+        self.vel_command_b[ids, 1] = 0.0
+        self.vel_command_b[ids, 2] = 0.0
+        self.is_standing_env[ids] = False
+        self.vel_command_w[ids] = self.vel_command_b[ids]
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         batch = visualizer.env_idx
@@ -4840,6 +4864,11 @@ class VelocityCommandCommandOnlyCfg(UniformVelocityCommandCfg):
     # 0.4 (historical) means in-place yaw below 0.4 rad/s is never trained (standing
     # envs zero the whole command; uniform sampling never gives lin == 0).
     turn_in_place_min_frac: float = 0.4
+    # Fraction of envs commanded to walk slowly straight ahead or back, |vx| in
+    # slow_walk_speed, no strafe or turn, each resample. 0 = disabled. Drawn from the
+    # envs the turn-in-place bucket did not take.
+    rel_slow_walk_envs: float = 0.0
+    slow_walk_speed: tuple[float, float] = (0.1, 0.25)
 
     def build(self, env: ManagerBasedRlEnv) -> "VelocityCommandCommandOnly":
         return VelocityCommandCommandOnly(self, env)

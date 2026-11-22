@@ -62,6 +62,19 @@ The critic keeps the true joint velocity (privileged).
    capped at ``HEAD_ROLL_COMMAND_SHARE`` of what each head joint can reach from
    HOME inside that clip: the neck can pitch only about 12 degrees above HOME.
 
+8. Slow walking under high friction, all off by default. 9250 fell on the robot at the end of a
+   0.15 m/s walk, and in sim does so at 3 to 5 times the bench friction; fine-tuned straight
+   onto 1 to 5 times, it stopped walking at every command (22/11/2026): the stock tracking term
+   pays a slow walk no more than standing still. ``DUKKI_FRICTION_RAMP="lo,hi,iterations"``
+   moves the friction range from ``DUKKI_FRICTION`` to lo..hi over that many iterations of the
+   run; ``DUKKI_FINE_LIN_VEL="weight,std"`` adds a tight tracking term on the velocity error
+   averaged over a stride (``track_lin_vel_smoothed``), beside the stock one;
+   ``DUKKI_SLOW_WALK=share[,lo,hi]`` makes that share of command resamples slow straight
+   walking, |vx| lo to hi (default 0.1 to 0.25 m/s). With those three alone it still stopped
+   walking as friction rose (run *_dukki-walk-slowwalk-*): ``DUKKI_ACTION_RATE=weight`` holds the
+   action-rate penalty, the largest cost of stepping, at a lighter fixed weight (the recipe ends
+   at -1.0).
+
 Gain sweep. ``DUKKI_KP`` [N.m/rad] and ``DUKKI_KD`` [N.m.s/rad] set the gains
 of every joint (default dukki_constants.J288_KP / J288_KD). They are read when
 the tasks are registered, so set them on the command line:
@@ -159,6 +172,191 @@ def use_dukki_friction(cfg: ManagerBasedRlEnvCfg, scale_range: tuple[float, floa
         if term is not None and term.func is microduck_mdp.randomize_bam_friction:
             term.func = randomize_bam_friction_per_joint
             term.params = {**term.params, "scale_range": tuple(scale_range)}
+    return cfg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Slow walking under high friction (8 in the module docstring)
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: PPO steps per iteration (the runners' num_steps_per_env): curricula count env steps.
+STEPS_PER_ITERATION = 24
+
+#: Time constant of the smoothed velocity error the fine tracking term scores [s]. Long enough
+#: to average over a stride (the body speed swings within each step), short enough to follow a
+#: command change.
+FINE_LIN_VEL_TAU_S = 1.0
+
+
+def dukki_friction_ramp() -> tuple[float, float, int] | None:
+    """``DUKKI_FRICTION_RAMP`` ("lo,hi,iterations"): the friction range to reach, and over how
+    many iterations from the start of this run. Unset: no ramp."""
+    text = os.environ.get("DUKKI_FRICTION_RAMP")
+    if not text:
+        return None
+    lo, hi, iters = (v.strip() for v in text.split(","))
+    lo, hi, iters = float(lo), float(hi), int(iters)
+    if not 0.0 < lo <= hi or iters <= 0:
+        raise ValueError(f"DUKKI_FRICTION_RAMP must be 0 < lo <= hi, iterations > 0; got {text!r}")
+    return lo, hi, iters
+
+
+def friction_ramp_curriculum(
+    env,
+    env_ids: torch.Tensor,
+    event_name: str,
+    start_range: tuple[float, float],
+    end_range: tuple[float, float],
+    ramp_steps: int,
+) -> torch.Tensor:
+    """Move ``event_name``'s ``scale_range`` linearly from ``start_range`` to ``end_range`` over
+    ``ramp_steps`` env steps, counted from this run's first call: a plain resume continues the
+    step counter, so absolute stages would already be over. Returns the upper bound in use."""
+    del env_ids
+    start = getattr(env, "_dukki_friction_ramp_start", None)
+    if start is None:
+        start = env.common_step_counter
+        env._dukki_friction_ramp_start = start
+    frac = min(1.0, max(0.0, (env.common_step_counter - start) / max(ramp_steps, 1)))
+    lo = start_range[0] + frac * (end_range[0] - start_range[0])
+    hi = start_range[1] + frac * (end_range[1] - start_range[1])
+    env.event_manager.get_term_cfg(event_name).params["scale_range"] = (lo, hi)
+    return torch.tensor(hi)
+
+
+def use_friction_ramp(cfg: ManagerBasedRlEnvCfg, ramp: tuple[float, float, int] | None = None) -> ManagerBasedRlEnvCfg:
+    """Ramp the per-joint friction range from its ``DUKKI_FRICTION`` value to ``ramp`` (default
+    ``DUKKI_FRICTION_RAMP``). Dropped straight onto 1 to 5 times the bench friction, the walk
+    fine-tune stopped walking at every command (run *_dukki-walk-friction5-*, 22/11/2026)."""
+    if ramp is None:
+        ramp = dukki_friction_ramp()
+    if ramp is None:
+        return cfg
+    from mjlab.managers import CurriculumTermCfg
+
+    for name, term in cfg.events.items():
+        if term is not None and term.func is randomize_bam_friction_per_joint:
+            cfg.curriculum[f"{name}_ramp"] = CurriculumTermCfg(
+                func=friction_ramp_curriculum,
+                params={
+                    "event_name": name,
+                    "start_range": tuple(term.params["scale_range"]),
+                    "end_range": (ramp[0], ramp[1]),
+                    "ramp_steps": ramp[2] * STEPS_PER_ITERATION,
+                },
+            )
+    return cfg
+
+
+def track_lin_vel_smoothed(
+    env,
+    std: float,
+    command_name: str = "twist",
+    tau_s: float = FINE_LIN_VEL_TAU_S,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """exp(-|EMA(v_cmd - v)|² / std²) on the body's xy velocity, the error averaged over ``tau_s``.
+
+    Added beside the stock ``track_linear_velocity`` (std 0.32), never instead of it. The stock
+    term scores the instantaneous error, and a walking body's speed swings within each stride
+    by about as much as a slow command: at 0.15 m/s, standing still keeps 80 % of it and 9250's
+    walk (lin err 0.15) about the same, so it pays nothing for walking slowly. Averaging over a
+    stride lets the swing cancel, so a tight std prices only how far the robot's mean speed is
+    from the command (Pollen added a fine yaw term beside the stock one for the same dead zone,
+    microduck_rl 4048a3ea; replacing it lost turning). Freshly reset envs start from zero.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)[:, :2]
+    err = cmd - asset.data.root_link_lin_vel_b[:, :2]
+    ema = getattr(env, "_dukki_lin_vel_err_ema", None)
+    if ema is None or ema.shape != err.shape:
+        ema = torch.zeros_like(err)
+    ema = ema.clone()
+    ema[env.episode_length_buf <= 1] = 0.0
+    alpha = min(1.0, float(env.step_dt) / max(tau_s, 1e-6))
+    ema = (1.0 - alpha) * ema + alpha * err
+    env._dukki_lin_vel_err_ema = ema
+    return torch.exp(-torch.sum(torch.square(ema), dim=1) / std**2)
+
+
+def dukki_fine_lin_vel() -> tuple[float, float] | None:
+    """``DUKKI_FINE_LIN_VEL`` ("weight,std"): the smoothed fine tracking term. Unset: off."""
+    text = os.environ.get("DUKKI_FINE_LIN_VEL")
+    if not text:
+        return None
+    weight, std = (float(v) for v in text.split(","))
+    if weight <= 0.0 or std <= 0.0:
+        raise ValueError(f"DUKKI_FINE_LIN_VEL must be weight,std > 0; got {text!r}")
+    return weight, std
+
+
+def dukki_slow_walk() -> tuple[float, tuple[float, float]]:
+    """``DUKKI_SLOW_WALK`` ("share" or "share,lo,hi"): share of command resamples that are slow
+    straight walking, and their |vx| range (default 0.1 to 0.25 m/s). Unset: share 0."""
+    parts = [float(v) for v in (os.environ.get("DUKKI_SLOW_WALK", "") or "0").split(",")]
+    share = parts[0]
+    speed = (parts[1], parts[2]) if len(parts) == 3 else (0.1, 0.25)
+    if len(parts) not in (1, 3) or not 0.0 <= share < 1.0 or not 0.0 < speed[0] <= speed[1]:
+        raise ValueError(f"DUKKI_SLOW_WALK must be share[,lo,hi] with share in [0, 1), 0 < lo <= hi; got {parts}")
+    return share, speed
+
+
+def dukki_action_rate() -> float | None:
+    """``DUKKI_ACTION_RATE``: a fixed ``action_rate_l2`` weight (negative) in place of the
+    velocity recipe's ramp, whose final stage is -1.0. Unset: the recipe's."""
+    text = os.environ.get("DUKKI_ACTION_RATE")
+    if not text:
+        return None
+    weight = float(text)
+    if weight > 0.0:
+        raise ValueError(f"DUKKI_ACTION_RATE is a penalty weight, <= 0; got {weight}")
+    return weight
+
+
+def use_action_rate_weight(cfg: ManagerBasedRlEnvCfg, weight: float | None = None) -> ManagerBasedRlEnvCfg:
+    """Hold ``action_rate_l2`` at ``weight`` (default ``DUKKI_ACTION_RATE``). It is the largest
+    cost of stepping, and grows with joint friction: the slow-walk fine-tune (run
+    *_dukki-walk-slowwalk-*, 22/11/2026) stopped walking as friction rose, the air-time reward
+    halving while the action-rate penalty (-0.8 per episode) barely moved. Pollen lightened it
+    "while the steps are discovered" (branch precision-mode)."""
+    weight = dukki_action_rate() if weight is None else weight
+    if weight is None or "action_rate_l2" not in cfg.rewards:
+        return cfg
+    cfg.rewards["action_rate_l2"].weight = weight
+    ramp = cfg.curriculum.get("action_rate_weight")
+    if ramp is not None and ramp.params.get("reward_name") == "action_rate_l2":
+        ramp.params = {**ramp.params, "weight_stages": [{"step": 0, "weight": weight}]}
+    return cfg
+
+
+def use_slow_walk_training(
+    cfg: ManagerBasedRlEnvCfg,
+    fine: tuple[float, float] | None = None,
+    slow_share: float | None = None,
+    slow_speed: tuple[float, float] | None = None,
+) -> ManagerBasedRlEnvCfg:
+    """The fine smoothed tracking term (``DUKKI_FINE_LIN_VEL``) and the slow-walk command bucket
+    (``DUKKI_SLOW_WALK``), on tasks that track a twist command. Both off by default."""
+    fine = dukki_fine_lin_vel() if fine is None else fine
+    env_share, env_speed = dukki_slow_walk()
+    slow_share = env_share if slow_share is None else slow_share
+    slow_speed = env_speed if slow_speed is None else slow_speed
+    if "track_linear_velocity" not in cfg.rewards:
+        return cfg
+    if fine is not None:
+        cfg.rewards["track_lin_vel_fine"] = RewardTermCfg(
+            func=track_lin_vel_smoothed,
+            weight=fine[0],
+            params={"std": fine[1], "command_name": "twist"},
+        )
+    if slow_share > 0.0:
+        twist = cfg.commands.get("twist")
+        if not isinstance(twist, microduck_mdp.VelocityCommandCommandOnlyCfg):
+            raise ValueError("DUKKI_SLOW_WALK needs the twist command to be VelocityCommandCommandOnlyCfg")
+        if twist.rel_turn_in_place_envs + slow_share >= 1.0:
+            raise ValueError("turn-in-place and slow-walk shares must sum to under 1")
+        twist.rel_slow_walk_envs = slow_share
+        twist.slow_walk_speed = tuple(slow_speed)
     return cfg
 
 
@@ -495,7 +693,9 @@ def make_dukki_variant(
             weight=OVER_LIMIT_WEIGHT,
             params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
         )
-    return use_legs_lowpass(apply_joint_stops(use_dukki_calibration_spread(use_dukki_friction(cfg))))
+    cfg = use_friction_ramp(use_dukki_friction(cfg))
+    cfg = use_action_rate_weight(use_slow_walk_training(cfg))
+    return use_legs_lowpass(apply_joint_stops(use_dukki_calibration_spread(cfg)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
