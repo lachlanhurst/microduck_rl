@@ -30,6 +30,22 @@ def test_bad_settings_refused(monkeypatch, name):
         reader()
 
 
+def test_friction_ramp_restarts_when_a_resume_restores_the_counter():
+    """The env resets at step 0, then the runner loads the checkpoint and the counter jumps to the
+    run's step: the ramp must start there, not count the jump as progress (run
+    *_dukki-walk-backlash-* went straight to its end range)."""
+    term = SimpleNamespace(params={"scale_range": (1.0, 3.0)})
+    env = SimpleNamespace(common_step_counter=0, event_manager=SimpleNamespace(get_term_cfg=lambda n: term))
+    ramp = dict(event_name="f", start_range=(1.0, 3.0), end_range=(1.0, 5.0), ramp_steps=100 * 24)
+    dk.friction_ramp_curriculum(env, None, **ramp)
+    env.common_step_counter = 9250 * 24
+    dk.friction_ramp_curriculum(env, None, **ramp)
+    assert term.params["scale_range"] == pytest.approx((1.0, 3.0))
+    env.common_step_counter += 50 * 24
+    dk.friction_ramp_curriculum(env, None, **ramp)
+    assert term.params["scale_range"] == pytest.approx((1.0, 4.0))
+
+
 def test_friction_ramp_counts_from_this_run():
     term = SimpleNamespace(params={"scale_range": (1.0, 3.0)})
     env = SimpleNamespace(common_step_counter=9250 * 24, event_manager=SimpleNamespace(get_term_cfg=lambda n: term))
@@ -39,8 +55,9 @@ def test_friction_ramp_counts_from_this_run():
     env.common_step_counter += 50 * 24
     dk.friction_ramp_curriculum(env, None, **ramp)
     assert term.params["scale_range"] == pytest.approx((1.0, 4.0))
-    env.common_step_counter += 500 * 24
-    dk.friction_ramp_curriculum(env, None, **ramp)
+    for _ in range(20):
+        env.common_step_counter += 25 * 24
+        dk.friction_ramp_curriculum(env, None, **ramp)
     assert term.params["scale_range"] == pytest.approx((1.0, 5.0))
 
 
@@ -135,3 +152,48 @@ def test_action_rate_weight_replaces_the_ramp(monkeypatch):
     monkeypatch.setenv("DUKKI_ACTION_RATE", "0.4")
     with pytest.raises(ValueError):
         dk.dukki_action_rate()
+
+
+def test_kd_range(monkeypatch):
+    assert "randomize_j288_kd" not in load_env_cfg("Mjlab-Velocity-Flat-Dukki").events
+    monkeypatch.setenv("DUKKI_KD_RANGE", "0.05,0.08")
+    assert dk.dukki_kd_range() == (0.05, 0.08)
+    cfg = dk.use_kd_range(load_env_cfg("Mjlab-Velocity-Flat-Dukki", play=True))
+    assert cfg.events["randomize_j288_kd"].params["kd_range"] == (0.05, 0.08)
+    cfg.scene.num_envs = 4
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+        env.reset()
+        act = env.scene["robot"].actuators[0]
+        assert act.kd.shape == act.default_kd.shape
+        assert float(act.kd.min()) >= 0.05 - 1e-6 and float(act.kd.max()) <= 0.08 + 1e-6
+        assert float(act.kd.std()) > 0.0, "joints drawn independently"
+    finally:
+        env.close()
+    monkeypatch.setenv("DUKKI_KD_RANGE", "0.08,0.05")
+    with pytest.raises(ValueError):
+        dk.dukki_kd_range()
+
+
+def test_fine_yaw_and_turn_bucket(monkeypatch):
+    cfg = load_env_cfg("Mjlab-Velocity-Flat-Dukki")
+    assert "track_ang_vel_fine" not in cfg.rewards
+    monkeypatch.setenv("DUKKI_FINE_ANG_VEL", "1.5,0.3")
+    monkeypatch.setenv("DUKKI_TURN_IN_PLACE", "0.2,0.2")
+    cfg = dk.use_slow_walk_training(load_env_cfg("Mjlab-Velocity-Flat-Dukki"))
+    term = cfg.rewards["track_ang_vel_fine"]
+    assert term.func is dk.track_ang_vel_smoothed and term.weight == 1.5 and term.params["std"] == 0.3
+    assert "track_angular_velocity" in cfg.rewards
+    twist = cfg.commands["twist"]
+    assert twist.rel_turn_in_place_envs == 0.2 and twist.turn_in_place_min_frac == pytest.approx(0.2)
+
+
+def test_smoothed_yaw_tracking_pays_turning_not_standing():
+    cmd = torch.tensor([[0.0, 0.0, 0.5], [0.0, 0.0, 0.5]])
+    env = _fake_env(cmd, None, torch.tensor([5, 5]))
+    for k in range(200):
+        wobble = 0.45 + 0.4 * math.sin(2 * math.pi * k * 0.02 / 0.5)
+        env.scene["robot"].data.root_link_ang_vel_b = torch.tensor([[0.0, 0.0, wobble], [0.0, 0.0, 0.0]])
+        out = dk.track_ang_vel_smoothed(env, std=0.3)
+    turning, standing = out.tolist()
+    assert turning > 0.9 and standing < 0.1

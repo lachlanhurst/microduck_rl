@@ -71,9 +71,20 @@ The critic keeps the true joint velocity (privileged).
    averaged over a stride (``track_lin_vel_smoothed``), beside the stock one;
    ``DUKKI_SLOW_WALK=share[,lo,hi]`` makes that share of command resamples slow straight
    walking, |vx| lo to hi (default 0.1 to 0.25 m/s). With those three alone it still stopped
-   walking as friction rose (run *_dukki-walk-slowwalk-*): ``DUKKI_ACTION_RATE=weight`` holds the
+   walking (run *_dukki-walk-slowwalk-*; its ramp did not ramp, a bug fixed since, so it trained at
+   1 to 5 times friction throughout): ``DUKKI_ACTION_RATE=weight`` holds the
    action-rate penalty, the largest cost of stepping, at a lighter fixed weight (the recipe ends
    at -1.0).
+
+9. Servo damping, off by default. ``DUKKI_KD_RANGE="lo,hi"`` draws each joint's kd in lo..hi
+   (N.m.s/rad) per episode, in place of the fixed ``DUKKI_KD``. On the robot kd 0.07 stood still
+   where the trained 0.05 left it restless, and caught pushes worse (22/11/2026).
+
+10. Turning in place, off by default. ``DUKKI_FINE_ANG_VEL="weight,std"`` adds a tight term on the
+    yaw-rate error averaged over a stride (``track_ang_vel_smoothed``) beside the stock one, and
+    ``DUKKI_TURN_IN_PLACE="share,min"`` sets the turn-in-place command share and its smallest
+    rate (recipe: 15 % from 0.4 rad/s). 9250 did not turn at all at 0.5 rad/s on the robot, and
+    the gear-play fine-tune (run *_dukki-walk-backlash-*) stopped turning in place altogether.
 
 Gain sweep. ``DUKKI_KP`` [N.m/rad] and ``DUKKI_KD`` [N.m.s/rad] set the gains
 of every joint (default dukki_constants.J288_KP / J288_KD). They are read when
@@ -182,6 +193,10 @@ def use_dukki_friction(cfg: ManagerBasedRlEnvCfg, scale_range: tuple[float, floa
 #: PPO steps per iteration (the runners' num_steps_per_env): curricula count env steps.
 STEPS_PER_ITERATION = 24
 
+#: A step-counter jump between friction-ramp calls bigger than this is a checkpoint load (resets
+#: come at least once an episode, 1000 steps), not training: the ramp restarts there.
+RAMP_RESTART_JUMP = 10 * 1000
+
 #: Time constant of the smoothed velocity error the fine tracking term scores [s]. Long enough
 #: to average over a stride (the body speed swings within each step), short enough to follow a
 #: command change.
@@ -210,14 +225,20 @@ def friction_ramp_curriculum(
     ramp_steps: int,
 ) -> torch.Tensor:
     """Move ``event_name``'s ``scale_range`` linearly from ``start_range`` to ``end_range`` over
-    ``ramp_steps`` env steps, counted from this run's first call: a plain resume continues the
-    step counter, so absolute stages would already be over. Returns the upper bound in use."""
+    ``ramp_steps`` env steps, counted from where this run's training starts: a plain resume
+    continues the step counter, so absolute stages would already be over. The env resets (and
+    calls this) before the runner loads the checkpoint and restores the counter, so a jump in the
+    counter between calls, which training never makes, restarts the ramp from there. Returns the
+    upper bound in use."""
     del env_ids
+    now = env.common_step_counter
     start = getattr(env, "_dukki_friction_ramp_start", None)
-    if start is None:
-        start = env.common_step_counter
+    last = getattr(env, "_dukki_friction_ramp_last", None)
+    if start is None or last is None or now - last > RAMP_RESTART_JUMP or now < last:
+        start = now
         env._dukki_friction_ramp_start = start
-    frac = min(1.0, max(0.0, (env.common_step_counter - start) / max(ramp_steps, 1)))
+    env._dukki_friction_ramp_last = now
+    frac = min(1.0, max(0.0, (now - start) / max(ramp_steps, 1)))
     lo = start_range[0] + frac * (end_range[0] - start_range[0])
     hi = start_range[1] + frac * (end_range[1] - start_range[1])
     env.event_manager.get_term_cfg(event_name).params["scale_range"] = (lo, hi)
@@ -279,6 +300,58 @@ def track_lin_vel_smoothed(
     return torch.exp(-torch.sum(torch.square(ema), dim=1) / std**2)
 
 
+def track_ang_vel_smoothed(
+    env,
+    std: float,
+    command_name: str = "twist",
+    tau_s: float = FINE_LIN_VEL_TAU_S,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """exp(-EMA(wz_cmd - wz)^2 / std^2): the yaw-rate twin of ``track_lin_vel_smoothed``, beside the
+    stock ``track_angular_velocity`` (std 0.71), whose loose tolerance pays a robot that stands
+    still when asked to turn slowly almost as well as one that turns. Pollen added a fine yaw term
+    (std 0.35) for the same dead zone (their microduck_rl 4048a3ea). Averaged over ``tau_s`` so the
+    yaw wobble of each stride cancels; at zero command it also prices veering while walking."""
+    asset: Entity = env.scene[asset_cfg.name]
+    err = env.command_manager.get_command(command_name)[:, 2] - asset.data.root_link_ang_vel_b[:, 2]
+    ema = getattr(env, "_dukki_ang_vel_err_ema", None)
+    if ema is None or ema.shape != err.shape:
+        ema = torch.zeros_like(err)
+    ema = ema.clone()
+    ema[env.episode_length_buf <= 1] = 0.0
+    alpha = min(1.0, float(env.step_dt) / max(tau_s, 1e-6))
+    ema = (1.0 - alpha) * ema + alpha * err
+    env._dukki_ang_vel_err_ema = ema
+    return torch.exp(-torch.square(ema) / std**2)
+
+
+def _weight_std(name: str) -> tuple[float, float] | None:
+    text = os.environ.get(name)
+    if not text:
+        return None
+    weight, std = (float(v) for v in text.split(","))
+    if weight <= 0.0 or std <= 0.0:
+        raise ValueError(f"{name} must be weight,std > 0; got {text!r}")
+    return weight, std
+
+
+def dukki_fine_ang_vel() -> tuple[float, float] | None:
+    """``DUKKI_FINE_ANG_VEL`` ("weight,std"): the smoothed fine yaw-rate term. Unset: off."""
+    return _weight_std("DUKKI_FINE_ANG_VEL")
+
+
+def dukki_turn_in_place() -> tuple[float, float] | None:
+    """``DUKKI_TURN_IN_PLACE`` ("share,min"): the turn-in-place command share and its smallest
+    |yaw rate|, rad/s, in place of the recipe's 15 % from 0.4 rad/s. Unset: the recipe's."""
+    text = os.environ.get("DUKKI_TURN_IN_PLACE")
+    if not text:
+        return None
+    share, low = (float(v) for v in text.split(","))
+    if not 0.0 <= share < 1.0 or low < 0.0:
+        raise ValueError(f"DUKKI_TURN_IN_PLACE must be share in [0, 1), min >= 0; got {text!r}")
+    return share, low
+
+
 def dukki_fine_lin_vel() -> tuple[float, float] | None:
     """``DUKKI_FINE_LIN_VEL`` ("weight,std"): the smoothed fine tracking term. Unset: off."""
     text = os.environ.get("DUKKI_FINE_LIN_VEL")
@@ -334,10 +407,15 @@ def use_slow_walk_training(
     fine: tuple[float, float] | None = None,
     slow_share: float | None = None,
     slow_speed: tuple[float, float] | None = None,
+    fine_yaw: tuple[float, float] | None = None,
+    turn: tuple[float, float] | None = None,
 ) -> ManagerBasedRlEnvCfg:
-    """The fine smoothed tracking term (``DUKKI_FINE_LIN_VEL``) and the slow-walk command bucket
-    (``DUKKI_SLOW_WALK``), on tasks that track a twist command. Both off by default."""
+    """The fine smoothed tracking terms (``DUKKI_FINE_LIN_VEL``, ``DUKKI_FINE_ANG_VEL``) and the
+    slow-walk and turn-in-place command buckets (``DUKKI_SLOW_WALK``, ``DUKKI_TURN_IN_PLACE``), on
+    tasks that track a twist command. All off (the recipe's) by default."""
     fine = dukki_fine_lin_vel() if fine is None else fine
+    fine_yaw = dukki_fine_ang_vel() if fine_yaw is None else fine_yaw
+    turn = dukki_turn_in_place() if turn is None else turn
     env_share, env_speed = dukki_slow_walk()
     slow_share = env_share if slow_share is None else slow_share
     slow_speed = env_speed if slow_speed is None else slow_speed
@@ -349,14 +427,25 @@ def use_slow_walk_training(
             weight=fine[0],
             params={"std": fine[1], "command_name": "twist"},
         )
-    if slow_share > 0.0:
+    if fine_yaw is not None:
+        cfg.rewards["track_ang_vel_fine"] = RewardTermCfg(
+            func=track_ang_vel_smoothed,
+            weight=fine_yaw[0],
+            params={"std": fine_yaw[1], "command_name": "twist"},
+        )
+    if slow_share > 0.0 or turn is not None:
         twist = cfg.commands.get("twist")
         if not isinstance(twist, microduck_mdp.VelocityCommandCommandOnlyCfg):
-            raise ValueError("DUKKI_SLOW_WALK needs the twist command to be VelocityCommandCommandOnlyCfg")
+            raise ValueError("the command buckets need the twist command to be VelocityCommandCommandOnlyCfg")
+        if turn is not None:
+            twist.rel_turn_in_place_envs = turn[0]
+            top = max(abs(v) for v in twist.ranges.ang_vel_z)
+            twist.turn_in_place_min_frac = min(1.0, turn[1] / top)
         if twist.rel_turn_in_place_envs + slow_share >= 1.0:
             raise ValueError("turn-in-place and slow-walk shares must sum to under 1")
-        twist.rel_slow_walk_envs = slow_share
-        twist.slow_walk_speed = tuple(slow_speed)
+        if slow_share > 0.0:
+            twist.rel_slow_walk_envs = slow_share
+            twist.slow_walk_speed = tuple(slow_speed)
     return cfg
 
 
@@ -388,6 +477,53 @@ def randomize_j288_kp_per_joint(
         if isinstance(actuator, J288DRActuator) and actuator.kp is not None:
             scale = torch.rand(len(env_ids), actuator.kp.shape[1], device=env.device) * (hi - lo) + lo
             actuator.kp[env_ids] = actuator.default_kp[env_ids] * scale
+
+
+def dukki_kd_range() -> tuple[float, float] | None:
+    """``DUKKI_KD_RANGE`` ("lo,hi", N.m.s/rad): each joint's kd drawn in it per episode. Unset: off,
+    every joint at ``DUKKI_KD``."""
+    text = os.environ.get("DUKKI_KD_RANGE")
+    if not text:
+        return None
+    lo, hi = (float(v) for v in text.split(","))
+    if not 0.0 <= lo <= hi:
+        raise ValueError(f"DUKKI_KD_RANGE must be 0 <= lo <= hi, got {text!r}")
+    return lo, hi
+
+
+def randomize_j288_kd_per_joint(
+    env,
+    env_ids: torch.Tensor | None,
+    kd_range: tuple[float, float],
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+):
+    """Draw each joint's J288 kd in ``kd_range`` for the episode (absolute, not a scale on the default).
+
+    Runs after the scene reset has restored every kd to its default (J288DRActuator.reset)."""
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+    else:
+        env_ids = env_ids.to(env.device, dtype=torch.long)
+    lo, hi = kd_range
+    for actuator in env.scene[asset_cfg.name].actuators:
+        if isinstance(actuator, J288DRActuator) and actuator.kd is not None:
+            actuator.kd[env_ids] = torch.rand(len(env_ids), actuator.kd.shape[1], device=env.device) * (hi - lo) + lo
+
+
+def use_kd_range(cfg: ManagerBasedRlEnvCfg, kd_range: tuple[float, float] | None = None) -> ManagerBasedRlEnvCfg:
+    """Randomise each joint's kd per episode in ``kd_range`` (default ``DUKKI_KD_RANGE``). The robot
+    stood still at kd 0.07 where the trained 0.05 left it restless, but caught pushes worse
+    (dukki docs/policy-testing.md section 5.7): a range lets one policy run at either."""
+    if kd_range is None:
+        kd_range = dukki_kd_range()
+    if kd_range is None:
+        return cfg
+    cfg.events["randomize_j288_kd"] = EventTermCfg(
+        func=randomize_j288_kd_per_joint,
+        mode="reset",
+        params={"kd_range": tuple(kd_range)},
+    )
+    return cfg
 
 
 def dukki_calibration_spread() -> bool:
@@ -693,7 +829,7 @@ def make_dukki_variant(
             weight=OVER_LIMIT_WEIGHT,
             params={"action_name": "joint_pos", "overshoot": OVER_LIMIT_TORQUE / kp},
         )
-    cfg = use_friction_ramp(use_dukki_friction(cfg))
+    cfg = use_kd_range(use_friction_ramp(use_dukki_friction(cfg)))
     cfg = use_action_rate_weight(use_slow_walk_training(cfg))
     return use_legs_lowpass(apply_joint_stops(use_dukki_calibration_spread(cfg)))
 
