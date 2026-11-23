@@ -396,6 +396,7 @@ class PpoWithExpertBc(PPO):
 
     def update(self) -> dict[str, float]:
         loss_dict = super().update()
-        if self.expert is not None:
+        # coef 0 and no anchor: nothing to teach, so no BC pass (and no BC optimizer steps)
+        if self.expert is not None and (self.bc_cfg["coef"] > 0.0 or self.anchor is not None):
             loss_dict.update(self._bc_update())
         return loss_dict

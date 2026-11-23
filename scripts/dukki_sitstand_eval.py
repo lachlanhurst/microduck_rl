@@ -97,6 +97,8 @@ def main():
     reach_times = defaultdict(list)  # case -> [s] for reached segments
     peak_vz = torch.zeros(n, device=env.device)  # fastest |vertical speed| in the segment [m/s]
     peak_vzs = defaultdict(list)
+    peak_w = torch.zeros(n, device=env.device)  # fastest trunk rotation in the segment, as the gyro reads it [rad/s]
+    peak_ws = defaultdict(list)
     fail_errs = defaultdict(list)  # case -> closest approach [mm] for missed segments
 
     def case_of(s, tall):
@@ -113,6 +115,7 @@ def main():
             head_counts[c] += int(head_touched[i])
             head_peaks[c] = max(head_peaks[c], float(head_peak[i]))
             peak_vzs[c].append(float(peak_vz[i]))
+            peak_ws[c].append(float(peak_w[i]))
             if reached[i]:
                 reach_times[c].append(float(first_reach[i]))
             else:
@@ -149,6 +152,8 @@ def main():
             best_err = torch.where(ended, err, torch.minimum(best_err, err))
             vz = robot.data.root_link_lin_vel_w[:, 2].abs()
             peak_vz = torch.where(ended, vz, torch.maximum(peak_vz, vz))
+            w = torch.nan_to_num(robot.data.root_link_ang_vel_b.norm(dim=1), nan=0.0)
+            peak_w = torch.where(ended, w, torch.maximum(peak_w, w))
             reached |= (since >= SETTLE_S) & (err < REACH_MM)
     close(torch.ones(n, dtype=torch.bool, device=env.device))
 
@@ -167,7 +172,9 @@ def main():
             print(f"      first within {REACH_MM:.0f} mm after median {rt.nanmedian():.2f} s, 90% {rt.nanquantile(0.9):.2f} s;"
                   f"  missed: closest median {fe.nanmedian():.0f} mm, 10% {fe.nanquantile(0.1):.0f} mm, 90% {fe.nanquantile(0.9):.0f} mm;"
                   f"  peak vertical speed median {torch.tensor(peak_vzs[c] or [float('nan')]).nanmedian():.2f} m/s,"
-                  f" 90% {torch.tensor(peak_vzs[c] or [float('nan')]).nanquantile(0.9):.2f} m/s")
+                  f" 90% {torch.tensor(peak_vzs[c] or [float('nan')]).nanquantile(0.9):.2f} m/s;"
+                  f"  peak trunk rate median {torch.tensor(peak_ws[c] or [float('nan')]).nanmedian():.1f} rad/s,"
+                  f" 90% {torch.tensor(peak_ws[c] or [float('nan')]).nanquantile(0.9):.1f} rad/s")
     env.close()
 
 

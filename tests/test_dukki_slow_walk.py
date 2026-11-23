@@ -216,3 +216,99 @@ def test_gear_play_twins_of_sit_stand_and_stand_up_run(task):
         env.step(torch.zeros(2, env.action_manager.total_action_dim))
     finally:
         env.close()
+
+
+def test_soft_trunk_switch_adds_the_trunk_rate_cost(monkeypatch):
+    """DUKKI_SOFT_TRUNK adds the squared trunk-rate cost to sit-stand; unset, nothing changes."""
+    task = "Mjlab-SitStand-Flat-Dukki"
+    assert "trunk_rate_squared" not in load_env_cfg(task).rewards
+    monkeypatch.setenv("DUKKI_SOFT_TRUNK", "-2,1.5")
+    cfg = dk.make_soft_transitions(load_env_cfg(task))
+    term = cfg.rewards["trunk_rate_squared"]
+    assert term.weight == -2.0 and term.params == {"cap": 1.5, "rising_only": False}
+    monkeypatch.setenv("DUKKI_SOFT_TRUNK", "-10,2,rise")
+    assert dk.make_soft_transitions(load_env_cfg(task)).rewards["trunk_rate_squared"].params["rising_only"]
+    monkeypatch.setenv("DUKKI_SOFT_TRUNK", "2,1.5")
+    with pytest.raises(ValueError):
+        dk.make_soft_transitions(load_env_cfg(task))
+
+
+def test_trunk_rate_squared_is_free_below_the_cap():
+    w = torch.tensor([[0.0, 1.0, 0.0], [3.0, 4.0, 0.0]])  # 1 and 5 rad/s
+    pos = torch.tensor([[0.0, 0.0, 0.08], [0.0, 0.0, 0.08]])
+    data = SimpleNamespace(root_link_ang_vel_b=w, root_link_pos_w=pos)
+    twist = SimpleNamespace(vel_command_b=torch.zeros(2, 3))
+    env = SimpleNamespace(scene={"robot": SimpleNamespace(data=data)},
+                          command_manager=SimpleNamespace(get_term=lambda name: twist))
+    assert torch.allclose(dk.trunk_rate_squared(env, cap=1.5), torch.tensor([0.0, 12.25]))
+    # Rising only: a stand command low down counts, a sit command or standing tall does not.
+    assert torch.allclose(dk.trunk_rate_squared(env, cap=1.5, rising_only=True), torch.tensor([0.0, 12.25]))
+    twist.vel_command_b[1, 0] = 1.0
+    assert torch.allclose(dk.trunk_rate_squared(env, cap=1.5, rising_only=True), torch.tensor([0.0, 0.0]))
+    twist.vel_command_b[1, 0] = 0.0
+    pos[1, 2] = 0.112
+    assert torch.allclose(dk.trunk_rate_squared(env, cap=1.5, rising_only=True), torch.tensor([0.0, 0.0]))
+
+
+def test_gear_play_stand_up_distill_is_the_distill_task_with_play(monkeypatch):
+    """Mjlab-StandUp-Flat-Backlash-Dukki-Distill: the distilled soft stand-up's rewards and runner
+    on the backlash twin, so a stand-up checkpoint fine-tunes on it unchanged."""
+    from mjlab.tasks.registry import load_rl_cfg
+
+    task = "Mjlab-StandUp-Flat-Backlash-Dukki-Distill"
+    cfg = load_env_cfg(task, play=True)
+    plain = load_env_cfg("Mjlab-StandUp-Flat-Dukki-Distill", play=True)
+    assert set(cfg.rewards) == set(plain.rewards)
+    assert "vertical_speed_squared_upright" in cfg.rewards
+    assert list(cfg.observations["actor"].terms) == list(plain.observations["actor"].terms)
+    assert type(load_rl_cfg(task).algorithm) is type(load_rl_cfg("Mjlab-StandUp-Flat-Dukki-Distill").algorithm)
+    cfg.scene.num_envs = 2
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+        env.reset()
+        assert any("backlash" in n for n in env.scene["robot"].joint_names)
+        env.step(torch.zeros(2, env.action_manager.total_action_dim))
+    finally:
+        env.close()
+
+
+def test_soft_trunk_switch_reaches_the_stand_up(monkeypatch):
+    """DUKKI_SOFT_TRUNK adds the trunk-rate cost to a stand-up cfg as it does to sit-stand."""
+    from mjlab_microduck.tasks.microduck_standup_env_cfg import make_microduck_standup_env_cfg
+
+    monkeypatch.setenv("DUKKI_SOFT_TRUNK", "-3,7,rise")
+    cfg = dk.make_soft_standup(dk.make_dukki_variant(make_microduck_standup_env_cfg(play=True), model="standup"))
+    term = cfg.rewards["trunk_rate_squared"]
+    assert term.weight == -3.0 and term.params == {"cap": 7.0, "rising_only": True}
+    monkeypatch.delenv("DUKKI_SOFT_TRUNK")
+    cfg = dk.make_soft_standup(dk.make_dukki_variant(make_microduck_standup_env_cfg(play=True), model="standup"))
+    assert "trunk_rate_squared" not in cfg.rewards
+
+
+def test_standup_mix_switch_sets_the_last_curriculum_stage(monkeypatch):
+    """DUKKI_STANDUP_MIX replaces the stand-up's final start mix (and the event's), earlier stages kept."""
+    from mjlab_microduck.tasks.microduck_standup_env_cfg import make_microduck_standup_env_cfg
+
+    base = dk.make_soft_standup(dk.make_dukki_variant(make_microduck_standup_env_cfg(), model="standup"))
+    monkeypatch.setenv("DUKKI_STANDUP_MIX", "0.10,0.15,0.25,0.50")
+    cfg = dk.make_soft_standup(dk.make_dukki_variant(make_microduck_standup_env_cfg(), model="standup"))
+    want = {"standing_prob": 0.10, "sitting_prob": 0.15, "face_down_prob": 0.25, "face_up_prob": 0.50}
+    stages = cfg.curriculum["ground_state_mix"].params["param_stages"]
+    assert stages[-1]["params"] == want
+    assert stages[:-1] == base.curriculum["ground_state_mix"].params["param_stages"][:-1]
+    assert all(cfg.events["set_ground_state"].params[k] == v for k, v in want.items())
+    monkeypatch.setenv("DUKKI_STANDUP_MIX", "0.5,0.5,0.5,0.5")
+    with pytest.raises(ValueError):
+        dk.dukki_standup_mix()
+
+
+def test_stand_expert_coef_switch(monkeypatch):
+    """DUKKI_STAND_EXPERT_COEF sets the BC weight of the stand-up distill runner; 1.0 by default."""
+    from mjlab_microduck.tasks.microduck_standup_env_cfg import MicroduckStandUpRlCfg
+
+    assert dk.make_dukki_standup_distill_rl_cfg(MicroduckStandUpRlCfg).algorithm.bc_cfg["coef"] == 1.0
+    monkeypatch.setenv("DUKKI_STAND_EXPERT_COEF", "0")
+    assert dk.make_dukki_standup_distill_rl_cfg(MicroduckStandUpRlCfg).algorithm.bc_cfg["coef"] == 0.0
+    monkeypatch.setenv("DUKKI_STAND_EXPERT_COEF", "-1")
+    with pytest.raises(ValueError):
+        dk.dukki_stand_expert_coef()

@@ -10,6 +10,9 @@ for --duration seconds with no resets, and every robot is judged:
     stays up   upright for the whole last second
     at limit   time with any joint's motor torque within 5% of the 1.0 N.m clamp
     spin       fastest yaw rate
+    rate       fastest trunk rotation, the magnitude the trunk gyro reads
+    over gyro  time with any gyro axis past the IMU's +-500 dps (GYRO_RANGE_RAD_S): the
+               chip's fused gravity is not to be trusted there
     rise       fastest upward trunk speed while upright-ish (tilted under UPRIGHT_DEG)
 
     DUKKI_KP=1 DUKKI_KD=0.05 uv run scripts/dukki_standup_eval.py \\
@@ -24,7 +27,7 @@ from dataclasses import asdict
 import torch
 
 import mjlab_microduck.tasks  # noqa: F401  (registers tasks)
-from mjlab_microduck.tasks.dukki import check_cfg_matches_run
+from mjlab_microduck.tasks.dukki import GYRO_RANGE_RAD_S, check_cfg_matches_run
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
@@ -88,6 +91,8 @@ def main():
         up_at_end = torch.ones(n, dtype=torch.bool, device=env.device)
         at_limit = torch.zeros(n, device=env.device)
         spin = torch.zeros(n, device=env.device)
+        rate = torch.zeros(n, device=env.device)
+        over_gyro = torch.zeros(n, device=env.device)
         rise = torch.zeros(n, device=env.device)
         with torch.no_grad():
             for k in range(steps):
@@ -100,7 +105,10 @@ def main():
                 if k >= steps - last_second:
                     up_at_end &= up
                 at_limit += (act.reported_torque.abs().amax(dim=1) > 0.95).float() * dt
-                spin = torch.maximum(spin, robot.data.root_link_ang_vel_b[:, 2].abs())
+                w = torch.nan_to_num(robot.data.root_link_ang_vel_b, nan=0.0)
+                spin = torch.maximum(spin, w[:, 2].abs())
+                rate = torch.maximum(rate, w.norm(dim=1))
+                over_gyro += (w.abs().amax(dim=1) > GYRO_RANGE_RAD_S).float() * dt
                 vz = robot.data.root_link_lin_vel_w[:, 2]
                 rise = torch.maximum(rise, torch.where(tilt < UPRIGHT_DEG, vz, torch.zeros_like(vz)))
         got = ~first_up.isnan()
@@ -113,6 +121,8 @@ def main():
             f"  at limit median {float(at_limit.median()):.2f} s, 90% {float(at_limit.quantile(0.9)):.2f} s"
             f"  spin median {float(spin.median()):.1f}, 90% {float(spin.quantile(0.9)):.1f} rad/s"
             f"  rise median {float(rise.median()):.2f}, 90% {float(rise.quantile(0.9)):.2f} m/s"
+            f"  rate median {float(rate.median()):.1f}, 90% {float(rate.quantile(0.9)):.1f} rad/s"
+            f"  over gyro median {float(over_gyro.median()):.2f} s, 90% {float(over_gyro.quantile(0.9)):.2f} s"
         )
         env.close()
 

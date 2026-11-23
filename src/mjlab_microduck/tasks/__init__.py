@@ -347,6 +347,18 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
+# The same with gear play (the groundcontact model's backlash twin), for the walk's and sit-stand's
+# robot recipe: friction ramp and kd range (dukki.py, 12).
+register_mjlab_task(
+    task_id="Mjlab-StandUp-Flat-Backlash-Dukki-Distill",
+    env_cfg=make_soft_standup(make_dukki_variant(make_microduck_standup_env_cfg(), model="standup", backlash=True)),
+    play_env_cfg=make_soft_standup(
+        make_dukki_variant(make_microduck_standup_env_cfg(play=True), model="standup", backlash=True)
+    ),
+    rl_cfg=make_dukki_standup_distill_rl_cfg(MicroduckStandUpRlCfg),
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
 register_mjlab_task(
     task_id="Mjlab-Testbench-J288",
     env_cfg=make_j288_testbench_env_cfg(),

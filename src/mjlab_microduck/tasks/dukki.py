@@ -86,6 +86,19 @@ The critic keeps the true joint velocity (privileged).
     rate (recipe: 15 % from 0.4 rad/s). 9250 did not turn at all at 0.5 rad/s on the robot, and
     the gear-play fine-tune (run *_dukki-walk-backlash-*) stopped turning in place altogether.
 
+11. A softer sit-stand, off by default. ``DUKKI_SOFT_TRUNK="weight,cap"`` adds a cost on the square
+    of the trunk's rotation rate above ``cap`` rad/s (``trunk_rate_squared``) to the sit-stand
+    tasks. The gear-play sit-stand 9248 rose every time on the robot, but its trunk peaked at 5 to
+    8 rad/s doing it (22/11/2026); the soft-transition costs only see vertical speed. Charged
+    everywhere at -10 (run *_dukki-sitstand-soft10-*), it stopped sitting rather than rise more
+    gently: ``DUKKI_SOFT_TRUNK="weight,cap,rise"`` charges only the rise. The stand-up tasks
+    take the same switch (``make_soft_standup``), there to keep the roll-over from face up
+    inside the trunk gyro's +-500 dps.
+
+12. Getting up after a fall with gear play: ``Mjlab-StandUp-Flat-Backlash-Dukki-Distill`` is the
+    distilled, soft stand-up on the groundcontact model's backlash twin, for fine-tuning the
+    stand-up with the walk's and sit-stand's recipe (friction ramp, kd range).
+
 Gain sweep. ``DUKKI_KP`` [N.m/rad] and ``DUKKI_KD`` [N.m.s/rad] set the gains
 of every joint (default dukki_constants.J288_KP / J288_KD). They are read when
 the tasks are registered, so set them on the command line:
@@ -97,6 +110,7 @@ the tasks are registered, so set them on the command line:
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from copy import deepcopy
@@ -1051,8 +1065,48 @@ def descent_speed_squared(env, max_vz: float = SOFT_DESCENT_MAX_VZ, asset_cfg: S
     return torch.clamp(-vz - max_vz, min=0.0) ** 2
 
 
+#: With ``rising_only``, the trunk-rate cost counts only under a stand command with the root below
+#: this height [m], 10 mm short of the standing target: the rise, not sitting or standing pushed.
+SOFT_TRUNK_RISE_BELOW = 0.105
+
+
+def trunk_rate_squared(
+    env,
+    cap: float,
+    rising_only: bool = False,
+    command_name: str = "twist",
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """(trunk rotation rate above ``cap``)^2 [(rad/s)^2]: the body-frame angular velocity's
+    magnitude, what the trunk IMU's gyro reads; 0 at or below ``cap``. With ``rising_only``, 0
+    except under a stand command below ``SOFT_TRUNK_RISE_BELOW``."""
+    data = env.scene[asset_cfg.name].data
+    w = torch.nan_to_num(data.root_link_ang_vel_b.norm(dim=1), nan=0.0)
+    cost = torch.clamp(w - cap, min=0.0) ** 2
+    if rising_only:
+        stand = env.command_manager.get_term(command_name).vel_command_b[:, 0] <= 0.5
+        cost = cost * (stand & (data.root_link_pos_w[:, 2] < SOFT_TRUNK_RISE_BELOW)).float()
+    return cost
+
+
+def dukki_soft_trunk() -> tuple[float, float, bool] | None:
+    """``DUKKI_SOFT_TRUNK`` ("weight,cap[,rise]"): the trunk-rate cost's weight (<= 0, per second
+    per (rad/s)^2), its free rate [rad/s], and with a third field "rise" only while rising. Unset: off."""
+    text = os.environ.get("DUKKI_SOFT_TRUNK")
+    if not text:
+        return None
+    parts = text.split(",")
+    if len(parts) not in (2, 3) or (len(parts) == 3 and parts[2].strip() != "rise"):
+        raise ValueError(f"DUKKI_SOFT_TRUNK must be weight,cap[,rise]; got {text!r}")
+    weight, cap = float(parts[0]), float(parts[1])
+    if weight > 0.0 or cap < 0.0:
+        raise ValueError(f"DUKKI_SOFT_TRUNK must be weight <= 0, cap >= 0; got {text!r}")
+    return weight, cap, len(parts) == 3
+
+
 def make_soft_transitions(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
-    """Adds the squared rise- and descent-speed costs and the stand-stall cost to a sit-stand cfg."""
+    """Adds the squared rise- and descent-speed costs and the stand-stall cost to a sit-stand cfg,
+    and with ``DUKKI_SOFT_TRUNK`` the squared trunk-rate cost (module docstring, 11)."""
     cfg.rewards["rise_speed_squared"] = RewardTermCfg(
         func=rise_speed_squared, weight=SOFT_TRANSITION_WEIGHT, params={"max_vz": SOFT_RISE_MAX_VZ}
     )
@@ -1062,6 +1116,11 @@ def make_soft_transitions(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
     cfg.rewards["stand_stall"] = RewardTermCfg(
         func=SitStall, weight=SIT_STALL_WEIGHT, params={"posture": "stand"}
     )
+    soft = dukki_soft_trunk()
+    if soft is not None:
+        cfg.rewards["trunk_rate_squared"] = RewardTermCfg(
+            func=trunk_rate_squared, weight=soft[0], params={"cap": soft[1], "rising_only": soft[2]}
+        )
     return cfg
 
 
@@ -1115,17 +1174,70 @@ def vertical_speed_squared_upright(
     return excess**2 * (_tilt_deg(env, asset_cfg) < tilt_deg).float()
 
 
+#: The trunk IMU's gyro range on Dukki (LSM6DSV16X at +-500 dps, src/bridge imu.rs) [rad/s].
+#: Past it the gyro clips and the chip's fused gravity goes wrong: sit-stand 7749 rising
+#: unfiltered at about 10 rad/s read the robot as upside down (22/11/2026). The stand-up
+#: checkpoints roll over from face up at 10 to 13 rad/s in simulation.
+GYRO_RANGE_RAD_S = 500.0 * math.pi / 180.0
+
+
 def make_soft_standup(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
-    """Adds the near-upright squared vertical-speed cost to a stand-up cfg."""
+    """Adds the near-upright squared vertical-speed cost to a stand-up cfg, and with
+    ``DUKKI_SOFT_TRUNK`` ("weight,cap[,rise]") the squared trunk-rate cost of the sit-stand
+    (module docstring, 11). With "rise" it counts only below SOFT_TRUNK_RISE_BELOW, which in
+    the stand-up is the whole way up from the floor and not standing pushed. Meant to keep the
+    roll-over from face up inside the gyro's range (GYRO_RANGE_RAD_S)."""
     cfg.rewards["vertical_speed_squared_upright"] = RewardTermCfg(
         func=vertical_speed_squared_upright, weight=SOFT_STANDUP_WEIGHT, params={}
     )
+    soft = dukki_soft_trunk()
+    if soft is not None:
+        cfg.rewards["trunk_rate_squared"] = RewardTermCfg(
+            func=trunk_rate_squared, weight=soft[0], params={"cap": soft[1], "rising_only": soft[2]}
+        )
+    mix = dukki_standup_mix()
+    if mix is not None:
+        cfg.events["set_ground_state"].params.update(mix)
+        curriculum = cfg.curriculum.get("ground_state_mix")
+        if curriculum is not None:
+            stages = deepcopy(curriculum.params["param_stages"])
+            stages[-1]["params"] = {**stages[-1]["params"], **mix}
+            curriculum.params = {**curriculum.params, "param_stages": stages}
     return cfg
+
+
+STANDUP_STARTS = ("standing", "sitting", "face_down", "face_up")
+
+
+def dukki_standup_mix() -> dict[str, float] | None:
+    """``DUKKI_STANDUP_MIX`` ("standing,sitting,face_down,face_up", summing to 1): the stand-up's
+    start mix once its curriculum has finished (its last stage is 0.15, 0.20, 0.30, 0.35). Unset: as
+    the task has it. On the corrected ground contact (dukki_constants.add_body_contact) face up is
+    the hard start: 23/11/2026, 0.10,0.15,0.25,0.50."""
+    text = os.environ.get("DUKKI_STANDUP_MIX")
+    if not text:
+        return None
+    values = [float(v) for v in text.split(",")]
+    if len(values) != 4 or min(values) < 0.0 or abs(sum(values) - 1.0) > 1e-6:
+        raise ValueError(f"DUKKI_STANDUP_MIX must be four shares summing to 1; got {text!r}")
+    return {f"{name}_prob": v for name, v in zip(STANDUP_STARTS, values)}
+
+
+def dukki_stand_expert_coef() -> float:
+    """``DUKKI_STAND_EXPERT_COEF``: the weight of the behaviour cloning from the stand expert
+    (default 1.0; 0 turns it off). Pollen's alpha_stand gets up from face up only through thighs
+    that pass through the floor: on the corrected ground contact it got up 10.5% of the time
+    with gear play and 1-4x friction (face down 95%, as before), 23/11/2026."""
+    coef = float(os.environ.get("DUKKI_STAND_EXPERT_COEF", "1.0"))
+    if coef < 0.0:
+        raise ValueError(f"DUKKI_STAND_EXPERT_COEF must be >= 0; got {coef}")
+    return coef
 
 
 def make_dukki_standup_distill_rl_cfg(base):
     """``base`` (the stand-up runner cfg) with PPO plus behaviour cloning from the stand
-    expert on tilted frames: no walk anchor. The expert path is ``DUKKI_STAND_EXPERT``."""
+    expert on tilted frames: no walk anchor. The expert path is ``DUKKI_STAND_EXPERT``, its
+    weight ``DUKKI_STAND_EXPERT_COEF``."""
     from dataclasses import fields, replace
 
     from mjlab_microduck.tasks.distill import PpoWithExpertBcCfg, default_bc_cfg
@@ -1135,6 +1247,7 @@ def make_dukki_standup_distill_rl_cfg(base):
         **default_bc_cfg(),
         "wandb_run_path": None,
         "checkpoint_path": os.environ.get("DUKKI_STAND_EXPERT", STAND_EXPERT_DEFAULT),
+        "coef": dukki_stand_expert_coef(),
         "gate_tilt_deg": STAND_EXPERT_GATE_DEG,
         "anchor_coef": 0.0,
         "anchor_wandb_run_path": None,

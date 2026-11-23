@@ -142,6 +142,40 @@ def test_head_roll_limit_only_narrows():
     np.testing.assert_array_equal(model.jnt_range, cad.jnt_range)
 
 
+def _colliding_bodies(model):
+    import mujoco
+
+    return {
+        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, model.geom_bodyid[g])
+        for g in range(model.ngeom)
+        if model.geom_contype[g] or model.geom_conaffinity[g]
+    }
+
+
+@pytest.mark.parametrize("spec_fn", [dk.get_dukki_standup_spec, dk.get_dukki_backlash_spec])
+def test_ground_contact_models_collide_the_whole_body(spec_fn, monkeypatch):
+    """The thighs, brackets and feet collide on the stand-up models, and not with DUKKI_BODY_CONTACT=0."""
+    import mujoco
+
+    from mjlab_microduck.tasks.dukki import home_rad
+
+    monkeypatch.delenv("DUKKI_BODY_CONTACT", raising=False)
+    model = spec_fn().compile()
+    added = {"upper_leg_left", "upper_leg_right", "yaw2roll", "bearing_roll", "neck", "neck_pitch", "yaw_roll_motion"}
+    assert added <= _colliding_bodies(model)
+    # standing at HOME, in the air: no part touches another
+    data = mujoco.MjData(model)
+    data.qpos[2], data.qpos[3] = 0.5, 1.0
+    for j in range(model.njnt):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, j)
+        if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_HINGE and not name.startswith("passive"):
+            data.qpos[model.jnt_qposadr[j]] = home_rad(name)
+    mujoco.mj_forward(model, data)
+    assert data.ncon == 0
+    monkeypatch.setenv("DUKKI_BODY_CONTACT", "0")
+    assert not added & _colliding_bodies(spec_fn().compile())
+
+
 def _bench_env(**kw):
     from mjlab.envs import ManagerBasedRlEnv
 

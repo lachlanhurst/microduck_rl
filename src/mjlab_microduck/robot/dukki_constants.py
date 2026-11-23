@@ -36,6 +36,8 @@ voltage range and command delay.
 
 from __future__ import annotations
 
+import os
+
 import mujoco
 import numpy as np
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
@@ -188,8 +190,61 @@ def get_dukki_walk_spec() -> mujoco.MjSpec:
     return dukki_spec(get_walk_spec())
 
 
+# ── Whole-body ground contact ────────────────────────────────────────────────
+# The ground-contact models (stand-up, sit-stand and their backlash twins) collide only the
+# parts Pollen's Onshape export gave collision geoms, carried over to the Fusion parts: the
+# soles, hip_l, the lower legs, the head shells and jaw, and a box for the battery. The trunk
+# shells, the thighs, the feet above the soles, the hip and neck brackets and the J288 housings
+# outside the head pass through the floor. On the robot, lying face up and rolled onto its
+# left side, the left thigh props it at 34 degrees, where the simulated one sank 25 mm into the
+# floor and rolled on to 70 (23/11/2026). These parts' visual meshes are added as collision
+# geoms (MuJoCo collides their convex hulls). DUKKI_BODY_CONTACT=0 leaves the MJCF's as they are.
+BODY_CONTACT_MESHES = (
+    "left_shell", "right_shell", "j288", "upper_leg_left", "upper_leg_right",
+    "upper_leg_rigidity_plate", "upper_leg_rigidity_plate_right", "foot_left", "foot_right",
+    "yaw2roll", "neck", "neck_pitch", "yaw_roll_motion",
+)
+#: Bodies left alone: the head's J288s sit inside its shells, which already collide.
+BODY_CONTACT_SKIP_BODIES = ("jaw_soft",)
+#: Body pairs never collided with each other, where the hulls touch in ordinary poses (MuJoCo
+#: already skips a body and its parent): the neck pitch bracket's hull reaches 2 mm into the
+#: head shell in every pose; the feet's hulls reach 7.6 mm into hip_l at the SIT keyframe (the
+#: soles alone, 1.3 mm).
+BODY_CONTACT_EXCLUDES: tuple[tuple[str, str], ...] = (
+    ("neck_pitch", "jaw_soft"),
+    ("ankle_left", "hip_l"),
+    ("ankle_right", "hip_l_2"),
+)
+
+
+def body_contact_enabled() -> bool:
+    """DUKKI_BODY_CONTACT, on unless set to 0."""
+    return os.environ.get("DUKKI_BODY_CONTACT", "1") != "0"
+
+
+def add_body_contact(spec: mujoco.MjSpec) -> mujoco.MjSpec:
+    """Give every ``BODY_CONTACT_MESHES`` visual mesh a colliding twin (group 3, condim 3), as hip_l's."""
+    if not body_contact_enabled():
+        return spec
+    for body in spec.bodies:
+        if body.name in BODY_CONTACT_SKIP_BODIES:
+            continue
+        for g in list(body.geoms):
+            if g.type != mujoco.mjtGeom.mjGEOM_MESH or g.meshname not in BODY_CONTACT_MESHES:
+                continue
+            if g.contype or g.conaffinity:
+                continue
+            body.add_geom(
+                type=mujoco.mjtGeom.mjGEOM_MESH, meshname=g.meshname, pos=g.pos, quat=g.quat,
+                contype=1, conaffinity=1, group=3, condim=3,
+            )
+    for a, b in BODY_CONTACT_EXCLUDES:
+        spec.add_exclude(bodyname1=a, bodyname2=b)
+    return spec
+
+
 def get_dukki_standup_spec() -> mujoco.MjSpec:
-    return dukki_spec(get_standup_spec())
+    return add_body_contact(dukki_spec(get_standup_spec()))
 
 
 def get_dukki_allcollisions_spec() -> mujoco.MjSpec:
@@ -201,7 +256,7 @@ def get_dukki_walk_backlash_spec() -> mujoco.MjSpec:
 
 
 def get_dukki_backlash_spec() -> mujoco.MjSpec:
-    return dukki_spec(get_backlash_spec())
+    return add_body_contact(dukki_spec(get_backlash_spec()))
 
 
 def get_dukki_allcollisions_backlash_spec() -> mujoco.MjSpec:
