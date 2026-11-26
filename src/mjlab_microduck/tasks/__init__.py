@@ -327,6 +327,21 @@ for _task_id, _make_cfg, _kw, _rl_cfg, _model, _backlash in _DUKKI_TASKS:
         runner_cls=MicroduckOnPolicyRunner,
     )
 
+# Dukki on terrain sized for it (steps and obstacles to DUKKI_TERRAIN_STEP, slopes, lumps) with its
+# own terrain curriculum (dukki_terrain.py). Same walk model, obs and actions as the flat walk, so a
+# flat checkpoint resumes straight on to it.
+from .dukki_terrain import use_dukki_terrain
+
+register_mjlab_task(
+    task_id="Mjlab-Velocity-Terrain-Backlash-Dukki",
+    env_cfg=use_dukki_terrain(make_dukki_variant(make_microduck_velocity_env_cfg(rough=True), model="walk", backlash=True)),
+    play_env_cfg=use_dukki_terrain(
+        make_dukki_variant(make_microduck_velocity_env_cfg(play=True, rough=True), model="walk", backlash=True), play=True
+    ),
+    rl_cfg=MicroduckRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
 # Dukki jump: stand, jump once when asked (twist vx = 1), land standing (dukki_jump.py).
 from .dukki_jump import make_dukki_jump_env_cfg, make_dukki_jump_rl_cfg
 

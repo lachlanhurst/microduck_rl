@@ -54,6 +54,10 @@ def main():
         default="task",
         help="starting posture where the task mixes them (sit-stand, stand-up): its own random mix, or forced",
     )
+    ap.add_argument("--terrain", help="TYPE:ROW on a terrain task, e.g. stairs:4 (rows 0..4 of rising difficulty)")
+    ap.add_argument("--start-x", type=float, default=0.0, help="start this far [m] from the tile centre along x (with --yaw)")
+    ap.add_argument("--yaw", type=float, help="starting heading [deg], at the tile's centre (default: the task's random reset)")
+    ap.add_argument("--robot-filters", action="store_true", help="robotd's target low-pass: legs 0.7, head 0.5")
     args = ap.parse_args()
 
     segments = []
@@ -82,8 +86,40 @@ def main():
         del cfg.curriculum[name]
     for term in cfg.commands.values():
         term.resampling_time_range = (1e6, 1e6)
+    tile = None
+    if args.terrain:
+        gen = cfg.scene.terrain.terrain_generator
+        if gen is None:
+            raise SystemExit(f"--terrain: {args.task} has no terrain generator")
+        kind, row = args.terrain.split(":")
+        gen.curriculum, gen.num_rows, gen.seed = True, 5, 0
+        cfg.curriculum.pop("terrain_levels", None)
+        tile = (int(row), list(gen.sub_terrains).index(kind))
+    if args.yaw is not None:
+        pose = cfg.events["reset_base"].params["pose_range"]
+        pose.update(x=(args.start_x, args.start_x), y=(0.0, 0.0), yaw=(float(np.radians(args.yaw)),) * 2)
+    if args.robot_filters:
+        from dataclasses import fields
+
+        from mjlab_microduck.tasks.lowpass_action import LowPassJointPositionActionCfg
+
+        a = cfg.actions["joint_pos"]
+        kept = {f.name: getattr(a, f.name) for f in fields(a) if f.init and f.name != "lowpass"}
+        cfg.actions["joint_pos"] = LowPassJointPositionActionCfg(
+            **kept, lowpass={r".*(hip|knee|ankle).*": 0.7, r"(neck|head)_.*": 0.5}
+        )
     check_cfg_matches_run(cfg, args.checkpoint)
+    # Seed before the env exists: its startup randomisation (masses, CoM, encoder offsets) draws then,
+    # so two checkpoints rendered with one seed meet the same robot.
+    cfg.seed = args.seed
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    if tile is not None:
+        terrain = env.scene.terrain
+        terrain.terrain_levels[:] = tile[0]
+        terrain.terrain_types[:] = tile[1]
+        terrain.env_origins[:] = terrain.terrain_origins[tile[0], tile[1]]
     rl_cfg = load_rl_cfg(args.task)
     wrapped = RslRlVecEnvWrapper(env, clip_actions=rl_cfg.clip_actions)
     if args.checkpoint.endswith(".onnx"):
@@ -149,7 +185,7 @@ def main():
                 pos = mj_data.xpos[trunk].copy()
                 look = pos if look is None else 0.9 * look + 0.1 * pos  # smooth the follow
                 heading = np.degrees(robot.data.heading_w[0].item())
-                cam.lookat[:] = [look[0], look[1], 0.09]
+                cam.lookat[:] = [look[0], look[1], look[2] - 0.03]
                 cam.azimuth = heading + args.azimuth
                 renderer.update_scene(mj_data, camera=cam)
                 frame = Image.fromarray(renderer.render())

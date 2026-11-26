@@ -181,9 +181,20 @@ def target_clip_rad() -> dict[str, tuple[float, float]]:
     return clip
 
 
+def sole_condim(spec: mujoco.MjSpec) -> mujoco.MjSpec:
+    """With ``DUKKI_SOLE_TORSION`` set, the sole geoms get condim 4 (torsional friction), which
+    tasks/dukki_terrain.py then randomises. Off: the MJCF's condim 3."""
+    if not os.environ.get("DUKKI_SOLE_TORSION"):
+        return spec
+    for name in ("left_foot_collision", "right_foot_collision"):
+        spec.geom(name).condim = 4
+    return spec
+
+
 def dukki_spec(spec: mujoco.MjSpec) -> mujoco.MjSpec:
-    """The Dukki changes to a loaded MJCF: unmodelled mass, the head roll limit and the joint stops."""
-    return limit_joint_travel(limit_head_roll(add_unmodelled_mass(spec)))
+    """The Dukki changes to a loaded MJCF: unmodelled mass, the head roll limit, the joint stops
+    and, when asked for, torsional friction at the soles."""
+    return sole_condim(limit_joint_travel(limit_head_roll(add_unmodelled_mass(spec))))
 
 
 def get_dukki_walk_spec() -> mujoco.MjSpec:

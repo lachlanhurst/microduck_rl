@@ -4790,7 +4790,16 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
         # turning. Mirrors the base rel_forward_envs mechanism.
         if p <= 0.0:
             return
-        turn_ids = env_ids[r < p]
+        pick = r < p
+        if getattr(self.cfg, "turn_in_place_flat_only", False):
+            # Dukki terrain (25/11/2026): a blind policy that is asked to turn on the spot on steps learns
+            # the turn is risky and gives it up everywhere. Only robots on the flat column are asked.
+            terrain = self._env.scene.terrain
+            gen = getattr(terrain.cfg, "terrain_generator", None) if terrain is not None else None
+            if gen is not None and "flat" in gen.sub_terrains and getattr(terrain, "terrain_types", None) is not None:
+                flat = list(gen.sub_terrains).index("flat")
+                pick = pick & (terrain.terrain_types[env_ids] == flat)
+        turn_ids = env_ids[pick]
         if len(turn_ids) == 0:
             return
         self.vel_command_b[turn_ids, 0] = 0.0
@@ -4864,6 +4873,8 @@ class VelocityCommandCommandOnlyCfg(UniformVelocityCommandCfg):
     # 0.4 (historical) means in-place yaw below 0.4 rad/s is never trained (standing
     # envs zero the whole command; uniform sampling never gives lin == 0).
     turn_in_place_min_frac: float = 0.4
+    # Only robots on the terrain generator's "flat" column get turn-in-place commands (no terrain: all).
+    turn_in_place_flat_only: bool = False
     # Fraction of envs commanded to walk slowly straight ahead or back, |vx| in
     # slow_walk_speed, no strafe or turn, each resample. 0 = disabled. Drawn from the
     # envs the turn-in-place bucket did not take.

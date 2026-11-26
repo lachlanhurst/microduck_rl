@@ -99,6 +99,10 @@ The critic keeps the true joint velocity (privileged).
     distilled, soft stand-up on the groundcontact model's backlash twin, for fine-tuning the
     stand-up with the walk's and sit-stand's recipe (friction ramp, kd range).
 
+13. Soft ground, torsional friction at the soles and terrain sized for Dukki: tasks/dukki_terrain.py
+    (``DUKKI_SOFT_GROUND``, ``DUKKI_SOLE_TORSION``, the ``Mjlab-Velocity-Terrain-...-Dukki`` tasks),
+    and a wider speed command range (``DUKKI_LIN_VEL_X``).
+
 Gain sweep. ``DUKKI_KP`` [N.m/rad] and ``DUKKI_KD`` [N.m.s/rad] set the gains
 of every joint (default dukki_constants.J288_KP / J288_KD). They are read when
 the tasks are registered, so set them on the command line:
@@ -135,6 +139,7 @@ from mjlab_microduck.robot.dukki_constants import (
 from mjlab_microduck.robot.microduck_constants import HOME_FRAME
 from mjlab_microduck.tasks import mdp as microduck_mdp
 from mjlab_microduck.tasks.backlash import make_backlash_variant
+from mjlab_microduck.tasks.dukki_terrain import use_big_pushes, use_sole_torsion, use_soft_ground, use_speed_range, use_walk_margin
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
@@ -845,6 +850,7 @@ def make_dukki_variant(
         )
     cfg = use_kd_range(use_friction_ramp(use_dukki_friction(cfg)))
     cfg = use_action_rate_weight(use_slow_walk_training(cfg))
+    cfg = use_big_pushes(use_walk_margin(use_speed_range(use_sole_torsion(use_soft_ground(cfg)))))
     return use_legs_lowpass(apply_joint_stops(use_dukki_calibration_spread(cfg)))
 
 
