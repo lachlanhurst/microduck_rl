@@ -139,7 +139,7 @@ from mjlab_microduck.robot.dukki_constants import (
 from mjlab_microduck.robot.microduck_constants import HOME_FRAME
 from mjlab_microduck.tasks import mdp as microduck_mdp
 from mjlab_microduck.tasks.backlash import make_backlash_variant
-from mjlab_microduck.tasks.dukki_terrain import use_big_pushes, use_sole_torsion, use_sole_twist, use_soft_ground, use_speed_range, use_walk_margin
+from mjlab_microduck.tasks.dukki_terrain import use_big_pushes, use_feet_squeeze, use_sole_torsion, use_sole_twist, use_soft_ground, use_speed_range, use_walk_margin
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
@@ -861,7 +861,7 @@ def make_dukki_variant(
         )
     cfg = use_kd_range(use_friction_ramp(use_dukki_friction(cfg)))
     cfg = use_action_rate_weight(use_slow_walk_training(cfg))
-    cfg = use_big_pushes(use_walk_margin(use_speed_range(use_sole_twist(use_sole_torsion(use_soft_ground(cfg))))))
+    cfg = use_feet_squeeze(use_big_pushes(use_walk_margin(use_speed_range(use_sole_twist(use_sole_torsion(use_soft_ground(cfg)))))))
     return use_legs_lowpass(apply_joint_stops(use_dukki_calibration_spread(cfg)))
 
 

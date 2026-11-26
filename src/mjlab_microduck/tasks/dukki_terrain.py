@@ -59,6 +59,15 @@
    network doing the standing (robotd's ``stand`` slot); the walk network standing at legs 0.84 is still
    on carpet (dukki docs/policy-testing.md section 13).
 
+8. Feet squeezing against each other. ``DUKKI_FEET_SQUEEZE="weight[,command_threshold]"`` adds a
+   reward ``feet_squeeze``: the part of the two feet's horizontal ground forces that cancels, in body
+   weights, while standing (command below the threshold, default 0.05). On carpet the robot twists at
+   ~5.5 Hz after stopping (runs/eval/stillness/NOTES.md); the thought is that it holds itself still on
+   the floor's grip rather than by balance, which carpet pile does not give. In simulation mpush2 12750
+   standing pushes its feet apart by only 0.05 to 0.15 N (about 1% of its weight), 0.2 N on average in
+   the first second after a stop (p90 0.5 to 0.7 N): runs/eval/squeeze/. A fine-tune at weight -20 halved
+   that and changed nothing else; not the cause.
+
 The policy stays blind (no height scan): it meets the terrain through its legs, as on the robot.
 """
 
@@ -699,4 +708,46 @@ def use_sole_twist(cfg: ManagerBasedRlEnvCfg, spec: tuple[float, float, float, f
         mode="reset",
         params={"stiffness_range": (klo, khi), "damping_range": (dlo, dhi), "soft_share": share},
     )
+    return cfg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Feet squeezing (or splaying) against each other through the floor
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Dukki's weight [N] (1.154 kg, weighed 21/11/2026): the squeeze is measured in body weights.
+DUKKI_WEIGHT_N = 1.154 * 9.81
+
+
+def feet_squeeze(env, sensor_name: str = "feet_ground_contact", command_name: str = "twist",
+                 command_threshold: float = 0.05) -> torch.Tensor:
+    """The part of the two feet's horizontal ground forces that cancels, 0.5 (|L| + |R| - |L + R|), in body
+    weights, while the command is below ``command_threshold`` (standing): the feet pushing against each other
+    (inwards or outwards, or twisting the robot between them), which holds nothing up and leans on the
+    floor's grip. Zero with one foot down."""
+    f = env.scene[sensor_name].data.force[..., :2]  # (n, 2, 2) net force per foot, global frame
+    internal = 0.5 * (f[:, 0].norm(dim=-1) + f[:, 1].norm(dim=-1) - (f[:, 0] + f[:, 1]).norm(dim=-1))
+    cmd = env.command_manager.get_command(command_name)[:, :3]
+    standing = cmd.norm(dim=-1) < command_threshold
+    return internal / DUKKI_WEIGHT_N * standing
+
+
+def dukki_feet_squeeze() -> tuple[float, float] | None:
+    """``DUKKI_FEET_SQUEEZE`` as "weight[,command_threshold]", or None when unset."""
+    text = os.environ.get("DUKKI_FEET_SQUEEZE")
+    if not text:
+        return None
+    v = [float(x) for x in text.split(",")]
+    if len(v) not in (1, 2) or v[0] > 0:
+        raise ValueError(f"DUKKI_FEET_SQUEEZE must be weight[,command_threshold] with weight <= 0; got {text!r}")
+    return v[0], (v[1] if len(v) == 2 else 0.05)
+
+
+def use_feet_squeeze(cfg: ManagerBasedRlEnvCfg) -> ManagerBasedRlEnvCfg:
+    """Section 8: add the ``feet_squeeze`` reward when ``DUKKI_FEET_SQUEEZE`` is set (a walk task only)."""
+    spec = dukki_feet_squeeze()
+    if spec is None or "track_linear_velocity" not in cfg.rewards or not any(x.name == "feet_ground_contact" for x in cfg.scene.sensors):
+        return cfg
+    cfg.rewards["feet_squeeze"] = RewardTermCfg(
+        func=feet_squeeze, weight=spec[0], params={"command_threshold": spec[1]})
     return cfg
