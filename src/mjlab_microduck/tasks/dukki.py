@@ -139,7 +139,7 @@ from mjlab_microduck.robot.dukki_constants import (
 from mjlab_microduck.robot.microduck_constants import HOME_FRAME
 from mjlab_microduck.tasks import mdp as microduck_mdp
 from mjlab_microduck.tasks.backlash import make_backlash_variant
-from mjlab_microduck.tasks.dukki_terrain import use_big_pushes, use_sole_torsion, use_soft_ground, use_speed_range, use_walk_margin
+from mjlab_microduck.tasks.dukki_terrain import use_big_pushes, use_sole_torsion, use_sole_twist, use_soft_ground, use_speed_range, use_walk_margin
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
@@ -587,6 +587,17 @@ def use_legs_lowpass(cfg: ManagerBasedRlEnvCfg, alpha: float | None = None) -> M
     if alpha is None:
         alpha = dukki_legs_lowpass()
     action = cfg.actions.get("joint_pos")
+    rng = os.environ.get("DUKKI_LOWPASS_RANGE")
+    if action is not None and rng:
+        # "legs_lo,legs_hi,head_lo,head_hi": robotd's filter drawn per robot each episode (26/11/2026,
+        # the carpet shake: the robot on carpet shook at legs 0.7, worse at 0.6, much less at 0.85).
+        v = [float(x) for x in rng.split(",")]
+        if len(v) != 4:
+            raise ValueError(f"DUKKI_LOWPASS_RANGE must be legs_lo,legs_hi,head_lo,head_hi; got {rng!r}")
+        kept = {f.name: getattr(action, f.name) for f in fields(action) if f.init and f.name not in ("lowpass", "lowpass_range")}
+        cfg.actions["joint_pos"] = LowPassJointPositionActionCfg(
+            **kept, lowpass_range={LEG_JOINTS: (v[0], v[1]), r"(neck|head)_.*": (v[2], v[3])})
+        return cfg
     if action is None or alpha >= 1.0:
         return cfg
     kept = {f.name: getattr(action, f.name) for f in fields(action) if f.init and f.name != "lowpass"}
@@ -850,7 +861,7 @@ def make_dukki_variant(
         )
     cfg = use_kd_range(use_friction_ramp(use_dukki_friction(cfg)))
     cfg = use_action_rate_weight(use_slow_walk_training(cfg))
-    cfg = use_big_pushes(use_walk_margin(use_speed_range(use_sole_torsion(use_soft_ground(cfg)))))
+    cfg = use_big_pushes(use_walk_margin(use_speed_range(use_sole_twist(use_sole_torsion(use_soft_ground(cfg))))))
     return use_legs_lowpass(apply_joint_stops(use_dukki_calibration_spread(cfg)))
 
 

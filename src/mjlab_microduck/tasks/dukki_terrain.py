@@ -44,6 +44,21 @@
    ``back_share`` of them backwards. The recipe's pushes are +-0.3 m/s on each world axis; the robot's walk
    fell to a single 0.7 m/s backward kick a third of the time (scripts/dukki_push_eval.py, 25/11/2026).
 
+7. Twist (and shear) under the soles. ``DUKKI_SOLE_TWIST="klo,khi,dlo,dhi[,share]"``: robot/dukki_constants.py
+   puts a passive hinge in each foot about the sole's normal; every episode ``share`` of the robots
+   (default 0.5) get its stiffness drawn in klo..khi [N.m/rad] and damping in dlo..dhi [N.m.s/rad],
+   the rest a stiff one (``SOLE_TWIST_HARD``). On carpet the robot shook after stopping, the whole
+   robot twisting on its feet at about 6 Hz with the hip yaws still (26/11/2026, dukki
+   scratch/policies/shake_*.json); the soft contact above sinks but barely twists, and training on it
+   left simulation dead still where the robot shook (runs/eval/stillness/). ``DUKKI_SOLE_SHEAR`` adds two
+   slides in each sole's plane; as "klo,khi,dlo,dhi" (N/m, N.s/m) the soft-soled robots draw them per
+   episode too (the hard ones get ``SOLE_SHEAR_HARD``). Of everything tried, only soft shear kept the
+   simulated robot twisting after a stop (runs/eval/stillness/NOTES.md, carpet search). A fine-tune of the
+   robot's walk on these soles with robotd's filter randomised (``DUKKI_LOWPASS_RANGE``) did not make it
+   stiller after a stop and lost turning on the spot. The robot's shake turned out to be the stand-up
+   network doing the standing (robotd's ``stand`` slot); the walk network standing at legs 0.84 is still
+   on carpet (dukki docs/policy-testing.md section 13).
+
 The policy stays blind (no height scan): it meets the terrain through its legs, as on the robot.
 """
 
@@ -554,4 +569,134 @@ def use_big_pushes(cfg: ManagerBasedRlEnvCfg, spec: tuple[float, float, float, f
     term.func = push_body_frame
     term.params = {"max_speed": spec[0], "back_share": spec[1]}
     term.interval_range_s = (spec[2], spec[3])
+    return cfg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Twist and shear under the soles
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Stiffness [N.m/rad] and damping [N.m.s/rad] of the sole hinges for the robots on a hard floor.
+SOLE_TWIST_HARD = (20.0, 0.5)
+DEFAULT_TWIST_SHARE = 0.5
+
+
+def dukki_sole_twist() -> tuple[float, float, float, float, float] | None:
+    """``DUKKI_SOLE_TWIST`` ("klo,khi,dlo,dhi[,share]") parsed, or None when unset."""
+    text = os.environ.get("DUKKI_SOLE_TWIST")
+    if not text:
+        return None
+    parts = [float(v) for v in text.split(",")]
+    if len(parts) not in (4, 5):
+        raise ValueError(f"DUKKI_SOLE_TWIST must be klo,khi,dlo,dhi[,share]; got {text!r}")
+    share = parts[4] if len(parts) == 5 else DEFAULT_TWIST_SHARE
+    klo, khi, dlo, dhi = parts[:4]
+    if not (0.0 < klo <= khi) or not (0.0 <= dlo <= dhi) or not (0.0 <= share <= 1.0):
+        raise ValueError(f"DUKKI_SOLE_TWIST needs 0 < klo <= khi, 0 <= dlo <= dhi, share in 0..1; got {text!r}")
+    return klo, khi, dlo, dhi, share
+
+
+def _sole_twist_ids(env, asset_cfg: SceneEntityCfg):
+    from mjlab_microduck.robot.dukki_constants import SOLE_TWIST_JOINTS
+
+    robot = env.scene[asset_cfg.name]
+    idx = [list(robot.joint_names).index(n) for n in SOLE_TWIST_JOINTS]
+    jnt = robot.indexing.joint_ids[idx].to(env.device)
+    dof = robot.indexing.joint_v_adr[idx].to(env.device)
+    return jnt, dof
+
+
+@requires_model_fields("jnt_stiffness", "dof_damping")
+def set_sole_shear(env, env_ids: torch.Tensor, stiffness: torch.Tensor, damping: torch.Tensor,
+                   asset_cfg: SceneEntityCfg = _ROBOT) -> None:
+    """The shear slides (DUKKI_SOLE_SHEAR, robot/dukki_constants.sole_twist) of robots ``env_ids``:
+    stiffness N/m and damping N.s/m, one value per robot."""
+    from mjlab_microduck.robot.dukki_constants import SOLE_TWIST_JOINTS
+
+    robot = env.scene[asset_cfg.name]
+    names = [f"{n}_shear_{t}" for n in SOLE_TWIST_JOINTS for t in ("u", "w")]
+    idx = [list(robot.joint_names).index(n) for n in names]
+    jnt = robot.indexing.joint_ids[idx].tolist()
+    dof = robot.indexing.joint_v_adr[idx].tolist()
+    env_ids = env_ids.to(env.device, dtype=torch.long)
+    k = env.sim.model.jnt_stiffness
+    d = env.sim.model.dof_damping
+    for j, v in zip(jnt, dof):
+        k[env_ids, j] = stiffness.to(k.dtype)
+        d[env_ids, v] = damping.to(d.dtype)
+
+
+@requires_model_fields("jnt_stiffness", "dof_damping")
+def set_sole_twist(env, env_ids: torch.Tensor, stiffness: torch.Tensor, damping: torch.Tensor,
+                   asset_cfg: SceneEntityCfg = _ROBOT) -> None:
+    """Both sole hinges of robots ``env_ids`` to these stiffness and damping values (one per robot)."""
+    jnt, dof = _sole_twist_ids(env, asset_cfg)
+    env_ids = env_ids.to(env.device, dtype=torch.long)
+    k = env.sim.model.jnt_stiffness
+    d = env.sim.model.dof_damping
+    for j, v in zip(jnt.tolist(), dof.tolist()):
+        k[env_ids, j] = stiffness.to(k.dtype)
+        d[env_ids, v] = damping.to(d.dtype)
+
+
+@requires_model_fields("jnt_stiffness", "dof_damping")
+def randomize_sole_twist(env, env_ids: torch.Tensor | None, stiffness_range: tuple[float, float],
+                         damping_range: tuple[float, float], soft_share: float = DEFAULT_TWIST_SHARE,
+                         asset_cfg: SceneEntityCfg = _ROBOT) -> None:
+    """Per episode (module docstring, 6)."""
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+    n = len(env_ids)
+    k = torch.rand(n, device=env.device) * (stiffness_range[1] - stiffness_range[0]) + stiffness_range[0]
+    d = torch.rand(n, device=env.device) * (damping_range[1] - damping_range[0]) + damping_range[0]
+    soft = torch.rand(n, device=env.device) < soft_share
+    k = torch.where(soft, k, torch.full_like(k, SOLE_TWIST_HARD[0]))
+    d = torch.where(soft, d, torch.full_like(d, SOLE_TWIST_HARD[1]))
+    set_sole_twist(env, env_ids, k, d, asset_cfg)
+    shear = dukki_sole_shear()
+    if shear is not None:  # the same robots on soft (sheared) soles as on twisting ones
+        klo, khi, dlo, dhi = shear
+        ks = torch.rand(n, device=env.device) * (khi - klo) + klo
+        ds = torch.rand(n, device=env.device) * (dhi - dlo) + dlo
+        ks = torch.where(soft, ks, torch.full_like(ks, SOLE_SHEAR_HARD[0]))
+        ds = torch.where(soft, ds, torch.full_like(ds, SOLE_SHEAR_HARD[1]))
+        set_sole_shear(env, env_ids, ks, ds, asset_cfg)
+
+
+#: Shear slide stiffness [N/m] and damping [N.s/m] for the robots on a hard floor.
+SOLE_SHEAR_HARD = (5000.0, 20.0)
+
+
+def dukki_sole_shear() -> tuple[float, float, float, float] | None:
+    """``DUKKI_SOLE_SHEAR`` as "klo,khi,dlo,dhi" (N/m, N.s/m) drawn per episode; a bare flag ("1") only adds
+    the slides (robot/dukki_constants.sole_twist) for an evaluation to set."""
+    text = os.environ.get("DUKKI_SOLE_SHEAR")
+    if not text or "," not in text:
+        return None
+    v = [float(x) for x in text.split(",")]
+    if len(v) != 4 or not (0 < v[0] <= v[1]) or not (0 <= v[2] <= v[3]):
+        raise ValueError(f"DUKKI_SOLE_SHEAR must be klo,khi,dlo,dhi; got {text!r}")
+    return v[0], v[1], v[2], v[3]
+
+
+def use_sole_twist(cfg: ManagerBasedRlEnvCfg, spec: tuple[float, float, float, float, float] | None = None) -> ManagerBasedRlEnvCfg:
+    spec = dukki_sole_twist() if spec is None else spec
+    if spec is None:
+        return cfg
+    from dataclasses import replace
+
+    from mjlab_microduck.robot.dukki_constants import SOLE_TWIST_JOINTS
+
+    robot = cfg.scene.entities["robot"]
+    init = robot.init_state
+    extra = {n: 0.0 for n in SOLE_TWIST_JOINTS}
+    if os.environ.get("DUKKI_SOLE_SHEAR"):
+        extra.update({f"{n}_shear_{t}": 0.0 for n in SOLE_TWIST_JOINTS for t in ("u", "w")})
+    robot.init_state = replace(init, joint_pos={**init.joint_pos, **extra})
+    klo, khi, dlo, dhi, share = spec
+    cfg.events["sole_twist"] = EventTermCfg(
+        func=randomize_sole_twist,
+        mode="reset",
+        params={"stiffness_range": (klo, khi), "damping_range": (dlo, dhi), "soft_share": share},
+    )
     return cfg

@@ -191,10 +191,89 @@ def sole_condim(spec: mujoco.MjSpec) -> mujoco.MjSpec:
     return spec
 
 
+#: The passive hinges under the soles that DUKKI_SOLE_TWIST adds (tasks/dukki_terrain.py, 7).
+SOLE_TWIST_JOINTS = ("passive_left_sole_twist", "passive_right_sole_twist")
+#: Their armature [kg.m^2]: enough to keep the stiffest spring tasks/dukki_terrain.py uses stable at
+#: the 5 ms physics step, small against the trunk's yaw inertia.
+SOLE_TWIST_ARMATURE = 2.0e-4
+
+
+def sole_twist(spec: mujoco.MjSpec) -> mujoco.MjSpec:
+    """With ``DUKKI_SOLE_TWIST`` set, a passive hinge in each foot about its sole's normal, through the
+    sole's centre: carpet pile lets a planted foot twist (and spring back) under the leg, which a rigid
+    contact cannot (26/11/2026). Its stiffness and damping are set per episode by
+    tasks/dukki_terrain.py; here a stiff default. Off: the model is unchanged."""
+    if not os.environ.get("DUKKI_SOLE_TWIST"):
+        return spec
+    import numpy as np
+
+    model = spec.compile()
+    for side, name in zip(("left", "right"), SOLE_TWIST_JOINTS):
+        g = model.geom(f"{side}_foot_collision")
+        mesh = int(model.geom_dataid[g.id])
+        a, n = int(model.mesh_vertadr[mesh]), int(model.mesh_vertnum[mesh])
+        v = model.mesh_vert[a : a + n].astype(float)
+        rot = np.zeros(9)
+        mujoco.mju_quat2Mat(rot, model.geom_quat[g.id])
+        v = v @ rot.reshape(3, 3).T + model.geom_pos[g.id]  # in the foot body's frame
+        centre = v.mean(0)
+        # The sole is a thin plate: its normal is the direction it varies least along.
+        _, _, vt = np.linalg.svd(v - centre, full_matrices=False)
+        axis = vt[2]
+        if np.dot(axis, -centre) < 0:  # point from the sole towards the ankle
+            axis = -axis
+        body = spec.body(model.body(int(model.geom_bodyid[g.id])).name)
+        body.add_joint(
+            name=name, type=mujoco.mjtJoint.mjJNT_HINGE, axis=axis.tolist(), pos=centre.tolist(),
+            stiffness=20.0, damping=0.5, armature=SOLE_TWIST_ARMATURE, frictionloss=0.0,
+            limited=mujoco.mjtLimited.mjLIMITED_TRUE, range=[-0.35, 0.35],
+        )
+        if os.environ.get("DUKKI_SOLE_SHEAR"):
+            # Two slides in the sole's plane: pile shears under a planted foot as well as twisting.
+            u = np.cross(axis, [1.0, 0.0, 0.0])
+            if np.linalg.norm(u) < 0.5:
+                u = np.cross(axis, [0.0, 1.0, 0.0])
+            u /= np.linalg.norm(u)
+            w = np.cross(axis, u)
+            for tag, ax in (("u", u), ("w", w)):
+                body.add_joint(
+                    name=f"{name}_shear_{tag}", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=ax.tolist(),
+                    pos=centre.tolist(), stiffness=5000.0, damping=20.0, armature=SOLE_SHEAR_ARMATURE,
+                    frictionloss=0.0, limited=mujoco.mjtLimited.mjLIMITED_TRUE, range=[-0.01, 0.01],
+                )
+    return spec
+
+
+#: Armature of the shear slides [kg]: about 1% of the robot's mass.
+SOLE_SHEAR_ARMATURE = 0.01
+
+
+def gear_play(spec: mujoco.MjSpec) -> mujoco.MjSpec:
+    """Evaluation knobs for the backlash models' gear play (26/11/2026, the carpet shake search; off by
+    default): ``DUKKI_PLAY_DEG`` sets every passive *_backlash joint's play to +-deg (the MJCF's is +-1),
+    ``DUKKI_PLAY_SOLREF`` the time constant of the play's end stops (the MJCF's 0.01 s; larger is a
+    springier stop: give in the gearbox or frame past the dead zone)."""
+    deg = os.environ.get("DUKKI_PLAY_DEG")
+    tc = os.environ.get("DUKKI_PLAY_SOLREF")
+    if not deg and not tc:
+        return spec
+    import math
+
+    for j in spec.joints:
+        if not (j.name.startswith("passive_") and j.name.endswith("_backlash")):
+            continue
+        if deg:
+            r = math.radians(float(deg))
+            j.range = [-r, r]
+        if tc:
+            j.solref_limit = [float(tc), 1.0]
+    return spec
+
+
 def dukki_spec(spec: mujoco.MjSpec) -> mujoco.MjSpec:
     """The Dukki changes to a loaded MJCF: unmodelled mass, the head roll limit, the joint stops
-    and, when asked for, torsional friction at the soles."""
-    return sole_condim(limit_joint_travel(limit_head_roll(add_unmodelled_mass(spec))))
+    and, when asked for, torsional friction at the soles and twist under them."""
+    return gear_play(sole_twist(sole_condim(limit_joint_travel(limit_head_roll(add_unmodelled_mass(spec))))))
 
 
 def get_dukki_walk_spec() -> mujoco.MjSpec:
